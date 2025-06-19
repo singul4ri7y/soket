@@ -33,42 +33,40 @@ class CPUDevice(Device):
 
     def zeros(self, *shape: Tuple[int], dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.zeroes(shape, dtype=dtype)
 
     def ones(self, *shape: Tuple[int], dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.ones(shape, dtype=dtype)
 
     def randn(self, *shape: Tuple[int], dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.random.randn(*shape).astype(dtype)
 
     def rand(self, *shape: Tuple[int], dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.random.rand(*shape).astype(dtype)
 
-    def one_hot(self, n: int, i: int, dtype: str = 'float32') -> NDArray:
-        hot = [0] * n
-        hot[i] = 1
-        return numpy.ndarray(hot, dtype=dtype)
+    def one_hot(self, n: int, i: NDArray, dtype: str = 'float32') -> NDArray:
+        return numpy.eye(n, dtype=dtype)[i]
 
     def empty(self, *shape, dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.empty(shape, dtype=dtype)
 
     def full(self, *shape, fill: float = 0., dtype: str = 'float32') -> NDArray:
         # If the shape is passed as a tuple or list
-        if len(shape) > 0 and (isinstance(shape[0], tuple) or isinstance(shape[0], list)):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
         return numpy.full(shape, fill, dtype=dtype)
 

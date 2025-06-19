@@ -19,7 +19,7 @@ class Node:
     requires_grad: bool
 
     def compute_cached_data(self) -> NDArray:
-        """ Compute the cached data form the inputs.
+        """ Compute the cached data from the inputs.
 
         Returns
         -------
