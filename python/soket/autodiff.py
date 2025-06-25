@@ -101,7 +101,11 @@ def make_gradient_compatible(node: Node):
             # dimension in the node.
             sum_axes.append(diff + (node_axes_len - i - 1))
 
-    node.grad = node.grad.sum(*sum_axes)
+    node.grad = node.grad.sum(*sum_axes, keepdims=True)
+
+    # Remove reduced shape if need be
+    if node.grad.shape != node.shape:
+        node.grad = node.grad.reshape(node.shape)
 
 
 def compute_gradient(out, grad):
@@ -141,39 +145,38 @@ def compute_gradient(out, grad):
 
 
 def reversed_topological_sort_and_init(out_node: Node) -> List[Node]:
-    """ A post-order iterative BFS to find reverse topological order Node list
+    """ A pre-order iterative DFS to find reverse topological order Node list
     of the computational graph. Also initializes tensor.grad with list() for two reasons:
      1. To accumulate partial adjoints.
-     2. To mark the node as visited in the topological sort.
+     2. To mark the node as visited/processed in the topological sort.
     """
 
     """ The direction of the computational graph is supposed to be from input to output. The graph is being
-    traversed in the reverse way using BFS, which luckily would result a topologically ordered traversal in this case. """
+    traversed in the reverse way using DFS, which luckily would result a topologically ordered traversal in this case. """
 
-    from queue import Queue
-
-    q = Queue()
-    q.put(out_node)  # `out_node` is guaranteed to require gradient.
+    s = [ (out_node, False) ]    # (node, is_processed)
 
     sorted_nodes: List[Node] = []
-    while not q.empty():
-        node = q.get()
+    while s:
+        node, is_processed = s.pop()
 
-        # If the node is visited
-        if isinstance(node.grad, list):
-            continue
+        # If the node is processed.
+        if is_processed:
+            if not isinstance(node.grad, list):
+                # Mark the node as visited
+                node.grad = list()
+                sorted_nodes.append(node)
+        else:
+            s.append((node, True))
 
-        # Mark the node as visited.
-        node.grad = list()
-        sorted_nodes.append(node)
+            # Push inputs to the node
+            for i in node.inputs:
+                # Stage the input node if gradient needs to be computed and
+                # is not visited
+                if i.requires_grad and not isinstance(i.grad, list):
+                    s.append((i, False))
 
-        # Push the inputs
-        for i in node.inputs:
-            # Stage the input node if gradient needs to computed and is not visited
-            if i.requires_grad:
-                q.put(i)
-
-    return sorted_nodes
+    return reversed(sorted_nodes)
 
 
 ##############################

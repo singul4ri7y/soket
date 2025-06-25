@@ -275,7 +275,7 @@ class Summation(TensorOp):
             return (None,)
 
         if self.keepdims is True:
-            return adj.broadcast_to(x.shape)
+            return (adj.broadcast_to(x.shape),)
 
         bcast_axes = list(x.shape)
         if self.axes is not None:
@@ -285,6 +285,24 @@ class Summation(TensorOp):
             bcast_axes = [1] * len(x.shape)
 
         return (adj.reshape(tuple(bcast_axes)).broadcast_to(x.shape),)
+
+
+class Mean(Summation):
+    def __init__(
+        self,
+        observations: int,
+        axes: Optional[Tuple[int]] = None,
+        keepdims: Optional[bool] = False
+    ):
+        super().__init__(axes, keepdims)
+
+        self.observations = observations
+
+    def compute(self, a: NDArray) -> NDArray:
+        return a.mean(self.axes, keepdims=self.keepdims)
+
+    def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
+        return (super().gradient(node, adj)[0] / self.observations,)
 
 
 class MatMul(TensorOp):
@@ -361,7 +379,7 @@ class LogSumExp(Summation):
 
         return res.reshape(tuple([x for x in res.shape if x != 1]))    \
             if not self.keepdims else res
-    
+
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         z = node.inputs[0]
         max = soket.Tensor.make_const(
@@ -369,7 +387,7 @@ class LogSumExp(Summation):
             requires_grad=True
         )
         exp_z = soket.exp(z - max)
-        sum_exp_z = exp_z.sum(*self.axes, keepdims=True)
+        sum_exp_z = exp_z.sum(() if self.axes is None else self.axes, keepdims=True)
         return (super().gradient(node, adj)[0] * exp_z / sum_exp_z,)
 
 
@@ -393,17 +411,17 @@ class SoftmaxCrossEntropy(LogSumExp):
 
         y: The label array (1d tensor) of size (B,) only.
         """
-    
+
         batch_xentropy = super().compute(Z) - (Z * self.one_hot.compute_cached_data()) \
             .sum(self.axes)
-        
+
         if self.reduction == 'mean':
             return batch_xentropy.mean()
         elif self.reduction == 'sum':
             return batch_xentropy.sum()
-        
+
         return batch_xentropy
-    
+
     def gradient(self, node: Tensor, adj: Tensor):
         """
             Note: Gradient for 'none' reduction type will result same gradient
@@ -421,19 +439,20 @@ class SoftmaxCrossEntropy(LogSumExp):
             batch_size = self.one_hot.shape[-2]
             return (batch_grad / batch_size,)
         elif self.reduction == 'none':
+            # TODO: Make the solution more flexlible
             new_shape = list(adj.shape) + [1]
             adj = adj.reshape(tuple(new_shape))
-        
+
         return (adj * batch_grad,)
-    
+
 
 class Select(TensorOp):
     def __init__(self, idx: int | slice | Tuple[int | slice]):
         self.idx = idx
-    
+
     def compute(self, a: NDArray):
         return a.__getitem__(self.idx) if array_api is numpy else a.get(self.idx)
-    
+
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         a = node.inputs[0]
         grad = soket.zeros_like(a)

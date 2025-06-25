@@ -34,27 +34,40 @@ def _extract_modules(value: object) -> List[Module]:
         modules = []
         for v in value.values():
             modules += _extract_modules(v)
-        
+
         return modules
     elif isinstance(value, (list, tuple)):
         modules = []
         for v in value:
             modules += _extract_modules(v)
-        
+
         return modules
     else:
         return []
 
 
 class Module:
+    def __init__(self):
+        self.training = True
+
+    def train(self):
+        self.training = True
+        for m in self.modules():
+            m.training = True
+
+    def eval(self):
+        self.training = False
+        for m in self.modules():
+            m.training = False
+
     def parameters(self) -> List[Parameter]:
         """ Returns the list of all the parameters in the module as a whole. """
         return _extract_params(self.__dict__)
-    
+
     def modules(self) -> List[Module]:
         """ Returns list of all the sub-modules including current module. """
         return _extract_modules(self)
-    
+
     def __call__(self, *args, **kwargs):
         """ Forward propagate when you call the module. """
         return self.forward(*args, **kwargs)

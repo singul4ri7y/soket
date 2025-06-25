@@ -203,10 +203,30 @@ class Tensor(Node):
 
         return Summation(None if len(axes) == 0 else tuple(axes), keepdims)(self)
 
+    def mean(self, *axes, keepdims: bool = False) -> Tensor:
+        if len(axes) > 0 and isinstance(axes[0], (tuple, list)):
+            axes = axes[0]
+
+        # Check for dimension index under/overshoot.
+        dimsiz = len(self.shape)
+        for i in axes:
+            assert isinstance(i, int), 'Shape index has to be integer'
+            if i < -dimsiz or i >= dimsiz:
+                raise ValueError(f'Axis out of bounds: {i} in {axes}')
+
+        observations = 1
+        if len(axes) == 0:
+            observations = self.size
+        else:
+            for i in axes:
+                observations *= self.shape[i]
+
+        return Mean(observations, None if len(axes) == 0 else tuple(axes), keepdims)(self)
+
     def reshape(self, *shape) -> Tensor:
         if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
             shape = shape[0]
-        
+
         assert math.prod(shape) == self.size, 'Attempt to reshape with different number of element count'
         return Reshape(shape)(self)
 
@@ -223,13 +243,13 @@ class Tensor(Node):
                 raise ValueError(f'Axis out of bounds: {i} in {axes}')
 
         return Permute(axes)
-    
+
     def argmax(self, axis=None, keepdims=False):
         assert isinstance(axis, int), 'Expected axis to be an integer'
 
         return Tensor.make_const(self.compute_cached_data().
             argmax(axis=axis, keepdims=keepdims))
-    
+
     def argmin(self, axis=None, keepdims=False):
         assert isinstance(axis, int), 'Expected axis to be an integer'
 
@@ -251,7 +271,7 @@ class Tensor(Node):
             return
 
         compute_gradient(self, grad if grad else soket.ones_like(self))
-    
+
     def item(self):
         """ Gets the scalar value of a scalar Tensor. """
 
@@ -320,7 +340,7 @@ class Tensor(Node):
 
     def __rpow__(self, pow: any) -> Tensor:
         """ This function will only be called in situations when scalar is
-        raised to a power 
+        raised to a power
         """
         tensor = soket.constant(self.shape, c=pow)
         return EWisePow()(tensor, self)
@@ -335,69 +355,69 @@ class Tensor(Node):
         """ Greater than """
         cached_data = self.compute_cached_data() > other.compute_cached_data() \
             if isinstance(other, Tensor) else self.compute_cached_data() > other
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
 
     def __ge__(self, other) -> Tensor:
         """ Greater than and equal """
         cached_data = self.compute_cached_data() >= other.compute_cached_data() \
             if isinstance(other, Tensor) else self.compute_cached_data() >= other
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
 
     def __rgt__(self, other) -> Tensor:
         """ Greater than (RHS)"""
         cached_data = other.compute_cached_data() > self.compute_cached_data() \
             if isinstance(other, Tensor) else other > self.compute_cached_data()
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
-    
+
     def __rge__(self, other) -> Tensor:
         """ Greater than and equal (RHS) """
         cached_data = other.compute_cached_data() >= self.compute_cached_data() \
             if isinstance(other, Tensor) else other >= self.compute_cached_data()
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
-    
+
     def __lt__(self, other) -> Tensor:
         """ Less than """
         cached_data = self.compute_cached_data() < other.compute_cached_data() \
             if isinstance(other, Tensor) else self.compute_cached_data() < other
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
 
     def __le__(self, other) -> Tensor:
         """ Less than and equal """
         cached_data = self.compute_cached_data() <= other.compute_cached_data() \
             if isinstance(other, Tensor) else self.compute_cached_data() <= other
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
 
     def __rlt__(self, other) -> Tensor:
         """ Less than (RHS)"""
         cached_data = other.compute_cached_data() < self.compute_cached_data() \
             if isinstance(other, Tensor) else other < self.compute_cached_data()
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
-    
+
     def __rle__(self, other) -> Tensor:
         """ Less than and equal (RHS) """
         cached_data = other.compute_cached_data() <= self.compute_cached_data() \
             if isinstance(other, Tensor) else other <= self.compute_cached_data()
-        
+
         return Tensor.make_const(cached_data, requires_grad=False)
-    
+
     def __eq__(self, other: Tensor) -> Tensor:
-        return Tensor.make_const(self.compute_cached_data() == 
+        return Tensor.make_const(self.compute_cached_data() ==
             other.compute_cached_data())
-    
+
     def __ne__(self, other: Tensor) -> Tensor:
-        return Tensor.make_const(self.compute_cached_data() != 
+        return Tensor.make_const(self.compute_cached_data() !=
             other.compute_cached_data())
-    
+
     def __getitem__(self, idx: int | slice | Tuple[int | slice]):
         return Select(idx)(self)
-    
+
     def __setitem__(
         self,
         idx: int | slice | Tuple[int | slice],
