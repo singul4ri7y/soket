@@ -30,8 +30,7 @@ class Tensor(Node):
         *,
         device: Optional[Device] = None,
         dtype: str = None,
-        requires_grad: bool = None,
-        **kwargs
+        requires_grad: bool = None
     ):
         if isinstance(array, Tensor):
             if device is None:

@@ -43,6 +43,7 @@ class SGD(Optimizer):
             if p.grad is None: 
                 continue
 
+            # Weight decay used as L2 regularization.
             if self.weight_decay != 0.0:
                 p.grad = p.grad.data + self.weight_decay * p.data
             
@@ -99,6 +100,7 @@ class Adam(Optimizer):
             if p.grad is None:
                 continue
             
+            # Weight decay used as L2 regularization.
             if self.weight_decay != 0.0:
                 p.grad = p.grad.data + self.weight_decay * p.data
 

@@ -254,3 +254,30 @@ class Flatten(Module):
 
         return X.reshape(new_dim)
 
+
+class Dropout(Module):
+    def __init__(self, p: float = 0.5):
+        super().__init__()
+
+        # Probability to draw from binomial distribution.
+        self.p = p
+
+    def forward(self, X: soket.Tensor) -> soket.Tensor:
+        # Dropout is only applied during training.
+        if self.training:
+            # Mask with keep rates.
+            keep_rate = 1 - self.p
+            binomial_mask = soket.randb(*X.shape, p=keep_rate, dtype=X.dtype)
+            return (X * binomial_mask) / (keep_rate)
+        else:
+            return X
+
+
+class Residual(Module):
+    """ Residual block for Residual Networks: https://arxiv.org/abs/1512.03385 """
+    
+    def __init__(self, fn: Module):
+        self.fn = fn
+
+    def forward(self, X: soket.Tensor) -> soket.Tensor:
+        return X + self.fn(X)

@@ -37,6 +37,8 @@ def _kaiming_prologue(shape: Tuple, mode='fan_in', nonlinearity='relu') -> Tuple
     Available modes: 'fan_in' and 'fan_out'
     """
 
+    # These non-linearity gains are measured by analyzing the plot of activation norm
+    # and gradient norm vs no of layers in DNN.
     nonlinearity_gain = {
         'linear': 1.0,
         'identity': 1.0,
