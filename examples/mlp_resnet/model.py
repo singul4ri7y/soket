@@ -5,8 +5,8 @@ from soket.transforms import ToTensor
 from soket.optim import Adam, Optimizer
 from soket.utils.data import DataLoader
 from soket.utils.data.datasets import MNIST
+from soket.nn.init import kaiming_normal
 import soket.nn as nn
-import soket.nn.init as F
 
 
 # Loss criterion being used.
@@ -52,7 +52,7 @@ class MLPResNet(nn.Sequential):
 
             *[ResidualBlock(hidden_dim, hidden_dim, norm=norm, drop_prob=drop_prob)
               for _ in range(num_blocks)],
-            
+
             nn.Linear(hidden_dim, num_classes)
         )
 
@@ -60,7 +60,7 @@ class MLPResNet(nn.Sequential):
 def mlp_resnet_get_accuracy(Z: Tensor, y: Tensor) -> float:
     """ A very crude implementation of model accuracy. """
 
-    # Apply softmax on logits then find and compare argmax to 
+    # Apply softmax on logits then find and compare argmax to
     # calculate the accuracy.
     # Warning: Soket Tensor does not support max() operation yet, hence
     # calculating softmax in this way might get unstable.
@@ -89,7 +89,7 @@ def mlp_resnet_epoch(
 
         total_loss += loss.item()
         total_acc += mlp_resnet_get_accuracy(logits, y)
-    
+
     total_loss /= dataloader.max_iter
     total_acc /= dataloader.max_iter
 
@@ -132,7 +132,7 @@ def train_and_test_mlp_resnet_with_mnist(
     # Kaiming initialization of the model parameters.
     for m in model.modules():
         if isinstance(m, nn.Linear):
-            F.kaiming_normal(m.weight)
+            kaiming_normal(m.weight)
 
     optim = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
 
@@ -140,7 +140,7 @@ def train_and_test_mlp_resnet_with_mnist(
     for e in range(epochs):
         train_loss, train_acc = mlp_resnet_epoch(model, train_loader, optim)
         print(f'Epoch: {e}, train loss: {train_loss}, train acc: {train_acc * 100} %')
-    
+
     model.eval()
     test_loss, test_acc = mlp_resnet_epoch(model, test_loader)
     print(f'Test loss: {test_loss}, test acc: {test_acc * 100} %')

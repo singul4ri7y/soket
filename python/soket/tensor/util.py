@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import List, Tuple
-from soket import Tensor
+from .tensor import Tensor
 from soket.backend.numpy import array_api
 
 

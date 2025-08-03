@@ -1,19 +1,21 @@
 from __future__ import annotations
 from typing import Tuple, Union, Optional
-from soket.backend.numpy import NDArray, array_api
-import numpy
+from abc import ABC, abstractmethod
+from soket.backend import NDArray
 import soket
 
 
-class Op:
+class Op(ABC):
     """ Operator class, works as a interface class to tensor specific
     operator classes
 
     """
 
+    @abstractmethod
     def __call__(self, *args):
         raise NotImplementedError()
 
+    @abstractmethod
     def compute(self, *args: Tuple[NDArray]) -> NDArray:
         """ Calculate forward pass of the operator
 
@@ -28,8 +30,10 @@ class Op:
             Output of the operation
 
         """
+
         raise NotImplementedError()
 
+    @abstractmethod
     def gradient(self, node: Node, adj: Node) -> Union[Node, Tuple[Node]]:
         """ Computes the partial adjoints of the inputs to current/this
         node in computational graph.
@@ -48,15 +52,15 @@ class Op:
             A list containing partial adjoints/gradients of inputs to this node
 
         """
+
         raise NotImplementedError()
 
 
-class TensorOp:
-    """ Oeperator class geared towards Tensors """
+class TensorOp(Op):
+    """ Oeperator class geared towards Tensors. """
 
     def __call__(self, *args):
-        from soket.tensor import Tensor
-        return Tensor.make_from_op(self, args)
+        return soket.Tensor._make_from_op(self, args)
 
 
 ## TENSOR OPERATIONS ##
@@ -172,13 +176,12 @@ class DivScalar(TensorOp):
 
 class Permute(TensorOp):
     """ Op to re-arrange a tensor """
+
     def __init__(self, axes: Tuple[int]):
         self.axes = axes
 
     def compute(self, a: NDArray) -> NDArray:
-        if array_api is numpy:
-            return numpy.transpose(a, self.axes)
-        return array_api.permute(a, self.axes)
+        return NDArray.permute(a, self.axes)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
         if not node.inputs[0].requires_grad:
@@ -193,17 +196,11 @@ class Permute(TensorOp):
         return (adj.permute(self.inv_axes),)
 
 
-class Transpose(Permute):
-    def __init__(self):
-        super().__init__(None)
-
+class Transpose(TensorOp):
     """ Only re-arrange last two dimensions """
-    def compute(self, a: NDArray) -> NDArray:
-        if self.axes is None:
-            shape_len = len(a.shape)
-            self.axes = tuple(range(shape_len - 2)) + (shape_len - 1, shape_len - 2)
 
-        return super().compute(a)
+    def compute(self, a: NDArray) -> NDArray:
+        return NDArray.swapaxes(a, -1, -2)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         return super().gradient(node, adj)
@@ -229,7 +226,7 @@ class BroadcastTo(TensorOp):
         self.shape = shape
 
     def compute(self, a: NDArray) -> NDArray:
-        return array_api.broadcast_to(a, self.shape)
+        return NDArray.broadcast_to(a, self.shape)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         x = node.inputs[0]
@@ -261,13 +258,15 @@ class Summation(TensorOp):
     def __init__(
         self,
         axes: Optional[Tuple[int]] = None,
+        dtype: str = None,
         keepdims: Optional[bool] = False
     ):
         self.axes = axes
+        self.dtype = dtype
         self.keepdims = keepdims
 
     def compute(self, a: NDArray) -> NDArray:
-        return a.sum(self.axes, keepdims=self.keepdims)
+        return a.sum(self.axes, dtype=self.dtype, keepdims=self.keepdims)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         x = node.inputs[0]
@@ -292,14 +291,14 @@ class Mean(Summation):
         self,
         observations: int,
         axes: Optional[Tuple[int]] = None,
+        dtype: str = None,
         keepdims: Optional[bool] = False
     ):
-        super().__init__(axes, keepdims)
-
+        super().__init__(axes, dtype, keepdims)
         self.observations = observations
 
     def compute(self, a: NDArray) -> NDArray:
-        return a.mean(self.axes, keepdims=self.keepdims)
+        return a.mean(self.axes, dtype=self.dtype, keepdims=self.keepdims)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         return (super().gradient(node, adj)[0] / self.observations,)
@@ -312,8 +311,8 @@ class MatMul(TensorOp):
     def gradient(self, node: Tensor, adj: Tensor):
         lhs, rhs = node.inputs
 
-        grad_lhs = adj @ rhs.t if lhs.requires_grad else None
-        grad_rhs = lhs.t @ adj if rhs.requires_grad else None
+        grad_lhs = adj @ rhs.T if lhs.requires_grad else None
+        grad_rhs = lhs.T @ adj if rhs.requires_grad else None
 
         return grad_lhs, grad_rhs
 
@@ -331,7 +330,7 @@ class Negate(TensorOp):
 
 class Log(TensorOp):
     def compute(self, a: NDArray) -> NDArray:
-        return array_api.log(a)
+        return NDArray.log(a)
 
     def gradient(self, node: Tensor, adj: Tensor):
         x = node.inputs[0]
@@ -402,7 +401,7 @@ class SoftmaxCrossEntropy(LogSumExp):
         super().__init__(axes)
 
         # Save one hot version of the ground truth
-        self.one_hot = soket.one_hot(num_classes, y)
+        self.one_hot = soket.one_hot(y, num_classes)
         self.reduction = reduction
 
     def compute(self, Z: NDArray) -> NDArray:

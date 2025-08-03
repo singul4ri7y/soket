@@ -24,16 +24,16 @@ class Compose(Transform):
     def __init__(self, transforms: List[Transform] | Tuple[Transform]):
         for t in transforms:
             assert isinstance(t, Transform)
-        
+
         self.transforms = transforms
 
     def transform(self, X):
         for tform in self.transforms:
             X = tform(X)
-        
+
         return X
 
 
 class ToTensor(Transform):
     def transform(self, X: List) -> Tensor:
-        return Tensor(X, dtype=X.dtype)
+        return Tensor.from_numpy(X)

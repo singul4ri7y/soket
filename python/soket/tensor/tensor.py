@@ -2,15 +2,48 @@ from __future__ import annotations
 from typing import Optional, List
 from soket.autodiff import Node, compute_gradient
 from soket.ops import *
-from soket.backend.numpy import NDArray, Device, cpu, array_api
-import soket
+from soket.backend import NDArray, Device, DeviceType
+from soket.backend.device import default_device
+from soket.dtype import DType, default_datatype
 import math
-import numpy
 
-# TODO: Handle tensor counts
 
 # If LAZY_MODE is disabled, Tensor data will be evaluated right after the operation
 LAZY_MODE = False
+
+
+# Decorator to adjust shapes and axes
+def tensor_adjust_axes_decor(func) -> function:
+    def wrapper(self, *shape, **kwargs):
+        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
+            shape = tuple(shape[0])
+
+        return func(self, shape, **kwargs)
+
+    return wrapper
+
+# Decorator for tensor reduction operations
+def tensor_reduction_decor(func) -> function:
+    @tensor_adjust_axes_decor
+    def wrapper(
+        self,
+        axes: Tuple[int],
+        dtype: DType = None,
+        keepdims: bool = True
+    ):
+        dtype = str(DType(dtype)) if dtype else None
+
+        # Check for dimension index under/overshoot.
+        dimsiz = len(self.shape)
+        for i, axis in enumerate(axes):
+            assert isinstance(axis, int), f'Invalid axis: {axes}[{i}] = {axis}'
+            if axis < -dimsiz or axis >= dimsiz:
+                raise ValueError(f'Axis out of bounds: {axes}[{i}] = {axis}')
+
+        return func(self, axes, dtype, keepdims)
+
+    return wrapper
+
 
 class Tensor(Node):
     """ Represents a soket Tensor """
@@ -29,85 +62,90 @@ class Tensor(Node):
         array,
         *,
         device: Optional[Device] = None,
-        dtype: str = None,
-        requires_grad: bool = None
-    ):
+        dtype: Optional[DType] = None,
+        requires_grad: bool = False
+    ) -> None:
+        assert isinstance(array, (list, tuple, int, float, bool, NDArray, Tensor)),  \
+            f'Invalid input to tensor {array}'
+
+        dtype = str(DType(dtype)) if dtype else None
+
         if isinstance(array, Tensor):
-            if device is None:
-                device = array.device
-            if dtype is None:
-                dtype = array.dtype
-            # If given tensor device and dtype is same, grab the given tensor data.
-            if device is array.device and dtype is array.dtype:
-                cached_data = array.compute_cached_data()
-            else:
-                # Fall back, copy through conversion
-                cached_data = Tensor._array_from_numpy(
-                    array.numpy(), device=device, dtype=dtype
-                )
-
+            device = array.device if device is None else device
+            cached_data = NDArray(array.compute_cached_data(), dtype=dtype,
+                device=device)
         else:
-            device = device if device else cpu()
-            dtype = dtype if dtype else 'float32'
-            cached_data = Tensor._array_from_numpy(array, device=device,
-                dtype=dtype)
+            if isinstance(array, NDArray):
+                device = array.device if not device else device
+            else:
+                device = default_device() if not device else device
 
-            self.init(
-                None,
-                [],
-                cached_data=cached_data,
-                requires_grad=requires_grad
-            )
+                # Default datatype for tensors are float32.
+                dtype = str(default_datatype) if not dtype else dtype
+
+            cached_data = NDArray(array, device=device, dtype=dtype)
+
+        self.init(
+            None,
+            [],
+            cached_data=cached_data,
+            requires_grad=requires_grad
+        )
+
+    ## PROPERTIES ##
 
     @property
     def shape(self) -> Tuple:
+        """ Returns shape of the tensor. """
+
         return self.compute_cached_data().shape
 
     @property
-    def dtype(self) -> str:
-        return self.compute_cached_data().dtype
+    def dtype(self) -> DType:
+        """ Get tensor datatype. """
+
+        return DType(str(self.compute_cached_data().dtype))
 
     @property
     def device(self) -> Device:
-        data = self.compute_cached_data()
-        if array_api is numpy:
-            return cpu()
-        return data.device
+        """ Returns the device tensor is using. """
+
+        return self.compute_cached_data().device
 
     @property
     def data(self) -> Tensor:
-        """ Get detached Tensor using property. """
+        """ Get a detached tensor. """
+
         return self.detach()
 
     @data.setter
-    def data(self, value):
+    def data(self, value: Tensor) -> None:
         """ Set the value of the current Tensor without changing the variable. """
 
-        assert isinstance(value, Tensor)
+        assert isinstance(value, Tensor), 'Expected a tensor value'
         assert self.dtype == value.dtype, 'Data-type mismatch: %s %s' %    \
             (self.dtype, value.dtype)
 
         self.cached_data = value.compute_cached_data()
 
     @property
-    def t(self) -> Tensor:
-        """ Property to get transposed (last two dimensions swapped) tensor """
+    def T(self) -> Tensor:
+        """ Returns a transposed (last two dimensions swapped) tensor. """
+
         return self.transpose()
 
     @property
     def size(self) -> int:
+        """ Returns size of the tensor. """
+
         return self.compute_cached_data().size
 
-    @staticmethod
-    def _array_from_numpy(numpy_array, device, dtype) -> NDArray:
-        if array_api is numpy:
-            return numpy.array(numpy_array, dtype=dtype)
-        else:
-            return array_api.array(numpy_array, device=device, dtype=dtype)
+    ## STATIC METHODS ##
 
     @staticmethod
-    def make_const(data: Tensor | NDArray, requires_grad: bool = False):
-        """ Creates a new cosntant tensor sharing the data which is detached
+    def make_const(data: Tensor | NDArray, requires_grad: bool = False) -> Tensor:
+        """
+        Creates a new cosntant tensor sharing the data which is detached
         from the computational graph.
 
         Parameters
@@ -118,22 +156,30 @@ class Tensor(Node):
         requires_grad: bool
             Should gradient be calculated for the newly created tensor if the
             tensor ends up creating a new computational graph.
-
         """
+
         # Does not call the `__init__` function
         tensor = Tensor.__new__(Tensor)
         tensor.init(
             None,
             [],
             cached_data=data
-                if not isinstance(data, Tensor)
+                if isinstance(data, NDArray)
                 else data.compute_cached_data(),
             requires_grad=requires_grad
         )
         return tensor
 
     @staticmethod
-    def make_from_op(op: Op, inputs: List[Tensor]):
+    def from_numpy(array: numpy.ndarray) -> Tensor:
+        """ Creates and returns a tensor from a numpy array. """
+
+        return Tensor(NDArray(array))
+
+    @staticmethod
+    def _make_from_op(op: Op, inputs: List[Tensor]) -> Tensor:
+        """ Creates a new tensor making it part of the computational graph. """
+
         tensor = Tensor.__new__(Tensor)
         tensor.init(op, inputs)
 
@@ -143,7 +189,10 @@ class Tensor(Node):
             if not tensor.requires_grad:
                 return tensor.detach()
             tensor.compute_cached_data()
+
         return tensor
+
+    ## METHODS ##
 
     def detach(self) -> Tensor:
         """ Creates a tensor which detaches from the graph. But using this
@@ -157,28 +206,51 @@ class Tensor(Node):
             sharing the same data
 
         """
+
         return Tensor.make_const(self)
 
-    def numpy(self):
-        data = self.compute_cached_data()
-        if array_api is numpy:
-            return data
-        return data.numpy()
+    def numpy(self) -> numpy.ndarray:
+        """ Returns the numpy representation of tensor. """
 
-    def transpose(self) -> Tensor:
-        assert len(self.shape) >= 2, 'Tensor shape must be >= 2'
-        return Transpose()(self)
+        return self.compute_cached_data().numpy()
 
-    def broadcast_to(self, *shape):
+    def migrate_to(self, device: Device, use: Optional[bool] = True) -> Tensor:
+        """ Migrates a tensor to given device and returns it. """
+
+        return Tensor(self.compute_cached_data().migrate_to(device, use))
+
+    def backward(self, grad: Optional[Tensor] = None) -> Tensor:
+        """ Computes gradients of all the Nodes upto this node using Reverse Mode AD.
+
+        Parameters
+        ----------
+        grad: Tensor
+            Initial gradient of this node. By default it will be filled with all ones
+            becasue d(out)/d(out) = 1
+
+        """
+
+        from .creation import ones_like
+
+        # Check whether gradient should be computed. If not, return.
+        if not self.requires_grad:
+            return
+
+        compute_gradient(self, grad if grad else ones_like(self))
+
+    ## OPERATIONS ##
+
+    @tensor_adjust_axes_decor
+    def broadcast_to(self, shape) -> Tensor:
+        """ Returns a tensor broadcasted to given shape. """
+
         assert len(shape) != 0, 'Expected a shape'
-        if isinstance(shape[0], (tuple, list)):
-            shape = shape[0]
 
         # Only integer shape allowed
         for i in shape:
             assert isinstance(i, int), 'Shape index has to be integer'
 
-        # Check whether the axes/dimension are compatible?
+        # Check whether the axes/dimensions are compatible?
         assert len(shape) >= len(self.shape), 'Attempt to contract a tensor through broadcasting'
         rv_self_shape = reversed(self.shape)
         rv_bcast_shape = reversed(shape)
@@ -189,29 +261,16 @@ class Tensor(Node):
 
         return BroadcastTo(shape)(self)
 
-    def sum(self, *axes, keepdims: bool = False) -> Tensor:
-        if len(axes) > 0 and isinstance(axes[0], (tuple, list)):
-            axes = axes[0]
+    @tensor_reduction_decor
+    def sum(self, axes, dtype: DType = None, keepdims: bool = False) -> Tensor:
+        """ Returns a new tensor performing summation reduction over given axes. """
 
-        # Check for dimension index under/overshoot.
-        dimsiz = len(self.shape)
-        for i in axes:
-            assert isinstance(i, int), 'Shape index has to be integer'
-            if i < -dimsiz or i >= dimsiz:
-                raise ValueError(f'Axis out of bounds: {i} in {axes}')
+        return Summation(None if len(axes) == 0 else axes,
+            dtype=dtype, keepdims=keepdims)(self)
 
-        return Summation(None if len(axes) == 0 else tuple(axes), keepdims)(self)
-
-    def mean(self, *axes, keepdims: bool = False) -> Tensor:
-        if len(axes) > 0 and isinstance(axes[0], (tuple, list)):
-            axes = axes[0]
-
-        # Check for dimension index under/overshoot.
-        dimsiz = len(self.shape)
-        for i in axes:
-            assert isinstance(i, int), 'Shape index has to be integer'
-            if i < -dimsiz or i >= dimsiz:
-                raise ValueError(f'Axis out of bounds: {i} in {axes}')
+    @tensor_reduction_decor
+    def mean(self, axes, dtype: DType = None, keepdims: bool = False) -> Tensor:
+        """ Returns a new tensor performing mean reduction over given axes. """
 
         observations = 1
         if len(axes) == 0:
@@ -220,19 +279,18 @@ class Tensor(Node):
             for i in axes:
                 observations *= self.shape[i]
 
-        return Mean(observations, None if len(axes) == 0 else tuple(axes), keepdims)(self)
+        return Mean(observations, None if len(axes) == 0 else axes,
+            dtype=dtype, keepdims=keepdims)(self)
 
-    def reshape(self, *shape) -> Tensor:
-        if len(shape) > 0 and isinstance(shape[0], (tuple, list)):
-            shape = shape[0]
-
-        assert math.prod(shape) == self.size, 'Attempt to reshape with different number of element count'
+    @tensor_adjust_axes_decor
+    def reshape(self, shape: int | Tuple[int]) -> Tensor:
+        assert isinstance(shape, (int, tuple)), f'Invalid shape {shape}'
+        assert math.prod(shape) == self.size, 'Attempt to reshape to different number of elements'
         return Reshape(shape)(self)
 
-    def permute(self, *axes) -> Tensor:
-        assert len(shape) != 0, 'Expected a shape'
-        if isinstance(shape[0], (tuple, list)):
-            shape = shape[0]
+    @tensor_adjust_axes_decor
+    def permute(self, axes: int | Tuple[int]) -> Tensor:
+        assert len(axes) != 0, 'Expected a shape'
 
         # Check for dimension index under/overshoot.
         dimsiz = len(self.shape)
@@ -241,7 +299,11 @@ class Tensor(Node):
             if i < -dimsiz or i >= dimsiz:
                 raise ValueError(f'Axis out of bounds: {i} in {axes}')
 
-        return Permute(axes)
+        return Permute(axes)(self)
+
+    def transpose(self) -> Tensor:
+        assert len(self.shape) >= 2, 'Tensor shape must be >= 2'
+        return Transpose()(self)
 
     def argmax(self, axis=None, keepdims=False):
         assert isinstance(axis, int), 'Expected axis to be an integer'
@@ -254,22 +316,6 @@ class Tensor(Node):
 
         return Tensor.make_const(self.compute_cached_data().
             argmin(axis=axis, keepdims=keepdims))
-
-    def backward(self, grad: Optional[Tensor] = None) -> Tensor:
-        """ Computes gradients of all the Nodes upto this node using Reverse Mode AD.
-
-        Parameters
-        ----------
-        grad: Tensor
-            Initial gradient of this node. By default it will be filled with all ones
-            becasue d(out)/d(out) = 1
-
-        """
-        # Check whether gradient should be computed. If not, return.
-        if not self.requires_grad:
-            return
-
-        compute_gradient(self, grad if grad else soket.ones_like(self))
 
     def item(self):
         """ Gets the scalar value of a scalar Tensor. """
@@ -285,6 +331,9 @@ class Tensor(Node):
 
         self._force_grad = True
 
+
+    ## DUNDER METHODS ##
+
     def __repr__(self):
         brand = 'soket.Tensor('
         prefix = ' ' * len(brand)
@@ -292,14 +341,26 @@ class Tensor(Node):
         res = brand + '\n'.join(lines[:1] + [prefix + line for line in    \
             lines[1:]]) + f', dtype={self.dtype}'
 
+        if self.device.type == DeviceType.GPU:
+            res += f', device=GPU:{self.device.id}'
+
         if self.requires_grad is True:
             res += ', requires_grad=True'
 
         return res + ')'
 
+    ## DUNDER OPERATIONS ##
+
     def __add__(self, other: Tensor | any) -> Tensor:
+        """ Adds and returns two Tensors (also supports scalar addtion). """
+
+        # Check if devices are compatible
+        assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+
         if isinstance(other, Tensor):
             return EWiseAdd()(self, other)
+
+        assert isinstance(other, (int, float, bool)), f'Invalid appends {other}'
         return AddScalar(other)(self)
 
     def __sub__(self, other: Tensor | any) -> Tensor:
@@ -341,7 +402,10 @@ class Tensor(Node):
         """ This function will only be called in situations when scalar is
         raised to a power
         """
-        tensor = soket.constant(self.shape, c=pow)
+
+        from .creation import full
+
+        tensor = full(self.shape, c=pow)
         return EWisePow()(tensor, self)
 
     __radd__ = __add__

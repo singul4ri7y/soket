@@ -1,1 +1,1 @@
-from soket.ops.defn import *
+from .defn import *
