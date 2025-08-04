@@ -1,5 +1,4 @@
 from .tensor import *
-from .backend.numpy import cpu
 from .ops.functional import log, exp, logsumexp
 
 from .dtype import _datatypes, default_datatype, get_scalar_dtype, promote_types

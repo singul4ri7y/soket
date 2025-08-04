@@ -3,6 +3,7 @@ from typing import Tuple, Union, Optional
 from abc import ABC, abstractmethod
 from soket.backend import NDArray
 import soket
+import math
 
 
 class Op(ABC):
@@ -66,17 +67,23 @@ class TensorOp(Op):
 ## TENSOR OPERATIONS ##
 
 class EWiseAdd(TensorOp):
+    """ Element-wise add operation w/o scalar. """
+
     def compute(self, a: NDArray, b: NDArray) -> NDArray:
         return a + b
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
-        grad_a = adj if node.inputs[0].requires_grad else None
-        grad_b = adj if node.inputs[1].requires_grad else None
+        a, b = node.inputs
+    
+        grad_a = adj if a.requires_grad else None
+        grad_b = adj if b.requires_grad else None
 
         return grad_a, grad_b
 
 
 class AddScalar(TensorOp):
+    """ Tensor element-wise addition with a scalar. """
+
     def __init__(self, scalar: any):
         self.scalar = scalar
 
@@ -86,21 +93,61 @@ class AddScalar(TensorOp):
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
         if not node.inputs[0].requires_grad:
             return (None,)
+        
         return (adj,)
 
 
+class EWiseSub(TensorOp):
+    """ Element-wise subtraction operation w/o scalar. """
+
+    def compute(self, a: NDArray, b: NDArray) -> NDArray:
+        return a - b
+
+    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
+        a, b = node.inputs
+    
+        grad_a = adj if a.requires_grad else None
+        grad_b = -adj if b.requires_grad else None
+
+        return grad_a, grad_b
+
+
+class SubScalar(TensorOp):
+    """ Tensor element-wise subtraction with a scalar. """
+
+    def __init__(self, scalar: any, commute: bool = False):
+        self.scalar = scalar
+        self.commute = commute
+
+    def compute(self, a: NDArray) -> NDArray:
+        return a - self.scalar if not self.commute  \
+            else self.scalar - a
+
+    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
+        if not node.inputs[0].requires_grad:
+            return (None,)
+        
+        return (adj if not self.commute else -adj,)
+
+
 class EWiseMul(TensorOp):
+    """ Tensor element-wise multiplication with a scalar. """
+
     def compute(self, a: NDArray, b: NDArray) -> NDArray:
         return a * b
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
         lhs, rhs = node.inputs
+
         grad_lhs = adj * rhs if lhs.requires_grad else None
         grad_rhs = adj * lhs if rhs.requires_grad else None
+    
         return grad_lhs, grad_rhs
 
 
 class MulScalar(TensorOp):
+    """ Tensor element-wise multiplication with a scalar. """
+
     def __init__(self, scalar: any):
         self.scalar = scalar
 
@@ -110,44 +157,12 @@ class MulScalar(TensorOp):
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
         if not node.inputs[0].requires_grad:
             return (None,)
+    
         return (adj * self.scalar,)
 
 
-class PowerScalar(TensorOp):
-    """ Op to raise a tensor to an (integer) power. """
-
-    def __init__(self, scalar: int):
-        self.scalar = scalar
-
-    def compute(self, a: NDArray) -> NDArray:
-        return a ** self.scalar
-
-    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
-        input = node.inputs[0]
-        if not input.requires_grad:
-            return (None,)
-
-        return ((self.scalar * (input ** (self.scalar - 1))) * adj,)
-
-
-class EWisePow(TensorOp):
-    """ Op to element-wise raise a tensor to a power. """
-
-    def compute(self, a: NDArray, b: NDArray) -> NDArray:
-        return a ** b
-
-    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
-        a, b = node.inputs
-
-        grad_a = adj * b * (a ** (b - 1)) if a.requires_grad else None
-        grad_b = adj * (a ** b) * array_api.log(a.cached_data) \
-            if b.requires_grad else None
-
-        return grad_a, grad_b
-
-
 class EWiseDiv(TensorOp):
-    """ Op to element-wise divide two nodes. """
+    """ Tensor element-wise division by another tensor. """
 
     def compute(self, a: NDArray, b: NDArray) -> NDArray:
         return a / b
@@ -156,26 +171,77 @@ class EWiseDiv(TensorOp):
         a, b = node.inputs
 
         grad_a = adj / a if a.requires_grad else None
-        grad_b = - adj * a / (b ** 2) if b.requires_grad else None
+        grad_b = -adj * a * (b ** -2) if b.requires_grad else None
 
         return grad_a, grad_b
 
 
 class DivScalar(TensorOp):
-    def __init__(self, scalar):
+    """ Tensor element-wise division with a scalar. """
+
+    def __init__(self, scalar: any, commute: bool = False):
         self.scalar = scalar
+        self.commute = commute
 
     def compute(self, a) -> NDArray:
-        return a / self.scalar
+        one_over_scalar = 1 / self.scalar
+
+        return (a * one_over_scalar) if not self.commute  \
+            else (self.scalar / a)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
-        if not node.inputs[0].requires_grad:
+        a = node.inputs[0]
+
+        if not a.requires_grad:
             return (None,)
-        return (adj / self.scalar,)
+    
+        one_over_scalar = 1 / self.scalar
+        grad = one_over_scalar if not self.commute  \
+            else -self.scalar * (a ** -2)
+    
+        return (grad * adj,)
+
+
+class EWisePow(TensorOp):
+    """ Tensor element-wise raise to a power operation. """
+
+    def compute(self, a: NDArray, b: NDArray) -> NDArray:
+        return a ** b
+
+    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
+        a, b = node.inputs
+
+        grad_a = b * (a ** (b - 1)) if a.requires_grad else None
+        grad_b = node * soket.log(a)  \
+            if b.requires_grad else None
+
+        return grad_a * adj, grad_b * adj
+
+
+class PowerScalar(TensorOp):
+    """ Tensor element-wise raise to a scalar power operation. """
+
+    def __init__(self, scalar: any, commute: bool=False):
+        self.scalar = scalar
+        self.commute = commute
+
+    def compute(self, a: NDArray) -> NDArray:
+        return a ** self.scalar if not self.commute  \
+            else self.scalar ** a
+
+    def gradient(self, node: Tensor, adj: Tensor) -> Tuple[Tensor]:
+        a = node.inputs[0]
+        if not a.requires_grad:
+            return (None,)
+        
+        grad = self.scalar * (a ** (self.scalar - 1)) if not self.commute  \
+            else node * math.log(self.scalar)
+
+        return (grad * adj,)
 
 
 class Permute(TensorOp):
-    """ Op to re-arrange a tensor """
+    """ Re-arrange dimensions of a tensor """
 
     def __init__(self, axes: Tuple[int]):
         self.axes = axes
@@ -187,26 +253,27 @@ class Permute(TensorOp):
         if not node.inputs[0].requires_grad:
             return (None,)
 
-        # Compute the inverse axes
-        if not self.inv_axes:
-            self.inv_axes = [0] * len(self.axes)
-            for i, x in self.axes:
-                self.inv_axes[x] = i
+        # Compute the inverse axes if not set
+        inv_axes = [0] * len(self.axes)
+        for i, x in self.axes:
+            self.inv_axes[x] = i
 
-        return (adj.permute(self.inv_axes),)
+        return (adj.permute(inv_axes),)
 
 
 class Transpose(TensorOp):
-    """ Only re-arrange last two dimensions """
+    """ Only re-arrange last two dimensions (matrix transpose). """
 
     def compute(self, a: NDArray) -> NDArray:
         return NDArray.swapaxes(a, -1, -2)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
-        return super().gradient(node, adj)
+        return adj.T
 
 
 class Reshape(TensorOp):
+    """ Reshape a tensor. """
+
     def __init__(self, shape: Tuple[int]):
         self.shape = shape
 
@@ -222,6 +289,8 @@ class Reshape(TensorOp):
 
 
 class BroadcastTo(TensorOp):
+    """ Broadcast a tensor to given shape. """
+
     def __init__(self, shape: Tuple[int]):
         self.shape = shape
 
@@ -233,28 +302,32 @@ class BroadcastTo(TensorOp):
         if not x.requires_grad:
             return (None,)
 
-        # Compute the summation shape if not computed
-        if not self.sum_shape:
-            rv_bcast_axes = reversed(self.axes)
-            rv_input_axes = reversed(x.shape)
-            bcast_axes_len = len(rv_bcast_axes)
-            input_axes_len = len(rv_input_axes)
-            diff = bcast_axes_len - input_axes_len
+        # Compute the summation shape
+        rv_bcast_axes = reversed(self.shape)
+        rv_input_axes = reversed(x.shape)
+        bcast_axes_len = len(self.shape)
+        input_axes_len = len(x.shape)
+        diff = bcast_axes_len - input_axes_len
 
-            sum_shape = list(range(diff))
-            for i, (input_shape, bcast_shape) in \
-            enumerate(zip(rv_bcast_axes, rv_input_axes)):
-                # Assuming broadcast shape is compatible
-                if input_shape != bcast_shape:
-                    # The index is for reversed shape. Also adjust for missing
-                    # dimension in the input tensor.
-                    sum_shape.append(diff + (input_axes_len - i - 1))
-            self.sum_shape = tuple(sum_shape)
+        sum_shape = list(range(diff))
+        for i, (input_shape, bcast_shape) in  \
+        enumerate(zip(rv_bcast_axes, rv_input_axes)):
+            # Assuming broadcast shape is compatible
+            if input_shape != bcast_shape:
+                # The index is for reversed shape. Also adjust for missing
+                # dimension in the input tensor.
+                sum_shape.append(diff + (input_axes_len - i - 1))
 
-        return (adj.sum(self.sum_shape),)
+        grad = adj.sum(sum_shape, keepdims=True)
+        if grad.shape != x.shape:
+            grad = grad.reshape(x.shape)
+
+        return (grad,)
 
 
 class Summation(TensorOp):
+    """ Reduce a tensor by performing summation. """
+
     def __init__(
         self,
         axes: Optional[Tuple[int]] = None,
@@ -287,6 +360,8 @@ class Summation(TensorOp):
 
 
 class Mean(Summation):
+    """ Reduce a tensor by performing mean. """
+
     def __init__(
         self,
         observations: int,
@@ -301,10 +376,14 @@ class Mean(Summation):
         return a.mean(self.axes, dtype=self.dtype, keepdims=self.keepdims)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
-        return (super().gradient(node, adj)[0] / self.observations,)
+        one_over_obs = 1 / self.observations
+    
+        return (super().gradient(node, adj)[0] * one_over_obs,)
 
 
 class MatMul(TensorOp):
+    """ Matrix-matrix multiplication operation of tensors. """
+
     def compute(self, a: NDArray, b: NDArray) -> NDArray:
         return a @ b
 
@@ -318,6 +397,8 @@ class MatMul(TensorOp):
 
 
 class Negate(TensorOp):
+    """ Negation operation on a tensor. """
+
     def compute(self, a: NDArray) -> NDArray:
         return -a
 
@@ -329,6 +410,8 @@ class Negate(TensorOp):
 
 
 class Log(TensorOp):
+    """ Perform element-wise natural log. """
+
     def compute(self, a: NDArray) -> NDArray:
         return NDArray.log(a)
 
@@ -341,8 +424,10 @@ class Log(TensorOp):
 
 
 class Exp(TensorOp):
+    """ Perform Euler's exponential operation. """
+
     def compute(self, a: NDArray) -> NDArray:
-        return array_api.exp(a)
+        return NDArray.exp(a)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         if not node.inputs[0].requires_grad:
@@ -352,8 +437,10 @@ class Exp(TensorOp):
 
 
 class ReLU(TensorOp):
+    """ Perform ReLU activation. """
+
     def compute(self, a: NDArray) -> NDArray:
-        return array_api.maximum(a, 0)
+        return NDArray.maximum(a, 0)
 
     def gradient(self, node: Tensor, adj: Tensor):
           x = node.inputs[0]
@@ -361,6 +448,77 @@ class ReLU(TensorOp):
               return (None,)
 
           return (adj * (x > 0),)
+    
+
+class Max(TensorOp):
+    """ Find maximum values over given dimensions. """
+
+    def __init__(
+        self,
+        axes: Optional[Tuple[int]],
+        keepdims: Optional[bool] = False
+    ):
+        self.axes = axes
+        self.keepdims = keepdims
+
+        # Will be used if keepdims is False.
+        self._retained_dim = None
+    
+    def compute(self, x: NDArray) -> NDArray:
+        if self.keepdims is False:
+            # Calculate reduced dimensions with same shape
+            self._retained_dim = list(x.shape)
+            
+            for axis in self.axes:
+                self._retained_dim[axis] = 1
+
+        return x.max(axes=self.axes, keepdims=self.keepdims)
+    
+    def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
+        x = node.inputs[0]
+
+        # Calculate mask, where maximum values are found.
+        if self.keepdims is False:
+            node = node.reshape(self._retained_dim)
+            adj = adj.reshape(self._retained_dim)
+        
+        mask = (x == node)
+        return (adj * mask,)
+    
+class Min(TensorOp):
+    """ Find minimum values over given dimensions. """
+
+    def __init__(
+        self,
+        axes: Optional[Tuple[int]],
+        keepdims: Optional[bool] = False
+    ):
+        self.axes = axes
+        self.keepdims = keepdims
+
+        # Will be used if keepdims is False.
+        self._retained_dim = None
+    
+    def compute(self, x: NDArray) -> NDArray:
+        if self.keepdims is False:
+            # Calculate reduced dimensions with same shape
+            self._retained_dim = list(x.shape)
+            
+            for axis in self.axes:
+                self._retained_dim[axis] = 1
+
+        return x.min(axes=self.axes, keepdims=self.keepdims)
+    
+    def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
+        x = node.inputs[0]
+
+        # Calculate mask, where maximum values are found.
+        if self.keepdims is False:
+            node = node.reshape(self._retained_dim)
+            adj = adj.reshape(self._retained_dim)
+        
+        mask = (x == node)
+        return (adj * mask,)
 
 
 class LogSumExp(Summation):
@@ -372,21 +530,18 @@ class LogSumExp(Summation):
         super().__init__(axes, keepdims)
 
     def compute(self, z: NDArray) -> NDArray:
-        max = z.max(axis=self.axes, keepdims=True)
-        res = array_api.log(array_api.exp(z - max).
-            sum(axis=self.axes, keepdims=True)) + max
+        max = z.max(axes=self.axes, keepdims=True)
 
-        return res.reshape(tuple([x for x in res.shape if x != 1]))    \
-            if not self.keepdims else res
+        return NDArray.log(NDArray.exp(z - max).
+            sum(axes=self.axes, keepdims=self.keepdims)) + max
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         z = node.inputs[0]
-        max = soket.Tensor.make_const(
-            data=z.compute_cached_data().max(axis=self.axes, keepdims=True),
-            requires_grad=True
-        )
+
+        max = z.max(*self.axes, keepdims=True)
         exp_z = soket.exp(z - max)
         sum_exp_z = exp_z.sum(() if self.axes is None else self.axes, keepdims=True)
+
         return (super().gradient(node, adj)[0] * exp_z / sum_exp_z,)
 
 
@@ -450,10 +605,11 @@ class Select(TensorOp):
         self.idx = idx
 
     def compute(self, a: NDArray):
-        return a.__getitem__(self.idx) if array_api is numpy else a.get(self.idx)
+        return a.__getitem__(self.idx)
 
     def gradient(self, node: Tensor, adj: Tensor) -> Tensor:
         a = node.inputs[0]
+
         grad = soket.zeros_like(a)
         grad.__setitem__(self.idx, adj)
 

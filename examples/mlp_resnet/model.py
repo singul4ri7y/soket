@@ -62,9 +62,7 @@ def mlp_resnet_get_accuracy(Z: Tensor, y: Tensor) -> float:
 
     # Apply softmax on logits then find and compare argmax to
     # calculate the accuracy.
-    # Warning: Soket Tensor does not support max() operation yet, hence
-    # calculating softmax in this way might get unstable.
-    e = exp(Z)
+    e = exp(Z - Z.max(-1, keepdims=True))
     softmax = e / e.sum(-1, keepdims=True)
 
     return (softmax.argmax(-1) == y).mean().item()
@@ -149,7 +147,7 @@ if __name__ == '__main__':
     train_and_test_mlp_resnet_with_mnist(
         batch_size=250,
         epochs=10,
-        lr=0.005,
+        lr=0.01,
         weight_decay=0.01,
         data_dir='data'
     )

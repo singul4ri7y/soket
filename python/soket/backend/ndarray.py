@@ -1,11 +1,22 @@
 from __future__ import annotations
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Sequence
+from soket.dtype import promote_types, get_scalar_dtype
 import math
 import numpy
 import cupy
 
 
 ## NOTE: Writing datatypes as strings is recommended for backend code instead of using soket.dtype.
+
+
+# Always ensure ndarray, especially for case of NumPy, where np.float64 (and friends)
+# type output might be possible.
+def ndarray_ensure(object: object, device: object) -> numpy.ndarray | cupy.ndarray:
+    if isinstance(object, device._backend.ndarray):
+        return object
+    else:
+        return device._backend.array(object)
+
 
 # NDArray reduction operation decorator for verifying valid axis.
 def ndarray_reduction_decor(func) -> function:
@@ -27,8 +38,34 @@ def ndarray_reduction_decor(func) -> function:
                 assert isinstance(axis, int), f'Invalid axis: {axes}[{i}] = {axis}'
                 if axis < -dimsiz or axis >= dimsiz:
                     raise ValueError(f'Axis out of bounds: {axes}[{i}] = {axis}')
+                
+        res = func(self, axes, dtype, keepdims)
+        return NDArray._without_copy(ndarray_ensure(res, self.device), self.device)
 
-        return NDArray._without_copy(func(self, axes, dtype, keepdims), self.device)
+    return wrapper
+
+# NDArray max/min operation decorator only for validating axis.
+def ndarray_max_min_decor(func) -> function:
+    def wrapper(
+        self,
+        axes: Optional[int | Tuple[int] | List[int]] = None,
+        keepdims: bool = False
+    ) -> NDArray:
+        if axes is not None:
+            assert isinstance(axes, (int, tuple, list)), f'Invalid axes {axes}'
+
+            # Check for dimension index under/overshoot.
+            dimsiz = len(self.shape)
+            if isinstance(axes, int):
+                if axes < -dimsiz or axes >= dimsiz:
+                    raise ValueError(f'Axis {axes} is out of bounds')
+            for i, axis in enumerate(axes):
+                assert isinstance(axis, int), f'Invalid axis: {axes}[{i}] = {axis}'
+                if axis < -dimsiz or axis >= dimsiz:
+                    raise ValueError(f'Axis out of bounds: {axes}[{i}] = {axis}')
+                
+        res = func(self, axes, keepdims)
+        return NDArray._without_copy(ndarray_ensure(res, self.device), self.device)
 
     return wrapper
 
@@ -44,9 +81,27 @@ def ndarray_static_decor_unary(func) -> function:
 # consistent type promotion for different dtypes.
 def ndarray_elemwise_decor(func) -> function:
     def wrapper(self, other: NDArray) -> NDArray:
-        assert isinstance(other, (int, float, bool, NDArray)), f'Invalid RHS input {other}'
+        if isinstance(other, NDArray):
+            assert self.device == other.device, f'Incompatible array device'
 
+            res = func(self._data, other._data)
 
+            # Use custom datatype promotion (if need be).
+            if self.dtype != other.dtype:
+                dtype = str(promote_types(self.dtype, other.dtype))
+
+                # If type promotion done differently.
+                if dtype != res.dtype:
+                    res = res.astype(dtype)
+        elif isinstance(other, (int, float, bool)):
+            scalar_ndarray = self.device._backend.array(other, dtype=self.dtype)
+            res = func(self._data, scalar_ndarray)
+        else:
+            raise ValueError(f'Invalid value {other}')
+        
+        return NDArray._without_copy(ndarray_ensure(res, self.device), device=self.device)
+    
+    return wrapper
 
 class NDArray:
     """
@@ -160,14 +215,7 @@ class NDArray:
     ):
         """ Returns array after performing summation reduction. """
 
-        res = self._data.sum(axes, dtype=dtype, keepdims=keepdims)
-        self.device.sync()
-
-        # NumPy can return scalar
-        if not isinstance(res, self.device._backend.ndarray):
-            res = self.device._backend.array(res)
-
-        return res
+        return self._data.sum(axes, dtype=dtype, keepdims=keepdims)
 
     @ndarray_reduction_decor
     def mean(
@@ -178,14 +226,27 @@ class NDArray:
     ):
         """ Returns array after performing mean reduction. """
 
-        res = self._data.mean(axes, dtype=dtype, keepdims=keepdims)
-        self.device.sync()
+        return self._data.mean(axes, dtype=dtype, keepdims=keepdims)
+    
+    @ndarray_max_min_decor
+    def max(
+        self,
+        axes: Optional[int | Tuple[int]] = None,
+        keepdims: Optional[bool] = False
+    ):
+        """ Finds and returns maximum numbers from an array. """
 
-        # NumPy can return scalar
-        if not isinstance(res, self.device._backend.ndarray):
-            res = self.device._backend.array(res)
+        return self._data.max(axes, keepdims=keepdims)
+    
+    @ndarray_max_min_decor
+    def min(
+        self,
+        axes: Optional[int | Tuple[int]] = None,
+        keepdims: Optional[bool] = False
+    ):
+        """ Finds and returns maximum numbers from an array. """
 
-        return res
+        return self._data.min(axes, keepdims=keepdims)
 
     def reshape(
         self,
@@ -209,7 +270,10 @@ class NDArray:
 
         assert isinstance(axis, int), 'Expected axis to be an integer'
 
-        return self._data.argmax(axis, keepdims=keepdims)
+        return NDArray._without_copy(
+            self._data.argmax(axis, keepdims=keepdims),
+            self.device
+        )
 
     def argmin(
         self,
@@ -220,7 +284,16 @@ class NDArray:
 
         assert isinstance(axis, int), 'Expected axis to be an integer'
 
-        return self._data.argmin(axis, keepdims=keepdims)
+        return NDArray._without_copy(
+            self._data.argmin(axis, keepdims=keepdims),
+            self.device
+        )
+    
+    def item(self) -> any:
+        """ Get scalar item from arrays with only one element. """
+
+        assert self.size == 1, f'Array must have only one element.'
+        return self._data.item()
 
     ## DUNDER METHODS ##
 
@@ -228,13 +301,270 @@ class NDArray:
         return self._data.__str__()
 
     ## DUNDER OPERATIONS ##
+    
+    @ndarray_elemwise_decor
+    def __add__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Performs addition on two arrays. Supports scalars. """
 
-    def __add__(self, other: NDArray) -> NDArray:
-        """ Adds and return two array, also supports scalar addition. """
+        return self_data + other
+    
+    __radd__ = __add__
+    
+    def __neg__(self) -> NDArray:
+        """ Returns a negated array. """
+    
+        return NDArray._without_copy(-self._data, device=self.device)
+    
+    @ndarray_elemwise_decor
+    def __sub__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """
+        Performs subtraction between two array and returns it.
+        Supports scalars.
+        """
 
+        # Operator function from LHS
+        return self_data - other
+    
+    @ndarray_elemwise_decor
+    def __rsub__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """
+        Performs subtraction between two array and returns it.
+        Supports scalars.
+        """
 
+        # Operator function from RHS
+        return other - self_data
+    
+    @ndarray_elemwise_decor
+    def __mul__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Performs multiplication on two arrays. Supports scalars. """
 
+        return self_data * other
+    
+    __rmul__ = __mul__
+    
+    @ndarray_elemwise_decor
+    def __truediv__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """
+        Divides an array with another array (or scalar). Returns the result.
+        """
 
+        # Operator function from LHS
+
+        return self_data / other
+
+    @ndarray_elemwise_decor
+    def __rtruediv__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """
+        Divides an array with another array (or scalar). Returns the result.
+        """
+
+        # Operator function from RHS
+
+        return other / self_data
+    
+    @ndarray_elemwise_decor
+    def __pow__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Performs element-wise power operation on array. Supports scalar. """
+
+        # Operator function from LHS
+
+        return self_data ** other
+    
+    @ndarray_elemwise_decor
+    def __rpow__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Performs element-wise power operation on array. Supports scalar. """
+
+        # Operator function from RHS
+
+        return other ** self_data
+
+    def __matmul__(self, other: NDArray) -> NDArray:
+        """ Perform matrix-matrix multiplication of arrays. """
+
+        assert isinstance(other, NDArray), f'Matrix/array must be NDArray'
+        assert self.device == other.device, f'Attempt to matmul NDArray from different '
+        f'devices, {self.device} and {other.device}'
+        
+        assert len(self.shape) >= 2, f'NDArray should atleast have 2 dimensions, shape {self.shape}'
+        assert len(other.shape) >= 2, f'NDArray should atleast have 2 dimensions, shape {other.shape}'
+
+        return NDArray._without_copy(self._data @ other._data, self.device)
+    
+    @ndarray_elemwise_decor
+    def __gt__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is greater than an element. """
+
+        # LHS operation
+
+        return self_data > other
+    
+    @ndarray_elemwise_decor
+    def __rgt__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is greater than an element. """
+
+        # RHS operation
+
+        return other > self_data
+    
+    @ndarray_elemwise_decor
+    def __ge__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is greater than and equal to an element. """
+
+        # LHS operation
+
+        return self_data >= other
+    
+    @ndarray_elemwise_decor
+    def __rge__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is greater than and equal to an element. """
+
+        # RHS operation
+
+        return other >= self_data
+    
+    @ndarray_elemwise_decor
+    def __lt__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is less than an element. """
+
+        # LHS operation
+
+        return self_data < other
+    
+    @ndarray_elemwise_decor
+    def __rlt__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is less than an element. """
+
+        # RHS operation
+
+        return other > self_data
+    
+    @ndarray_elemwise_decor
+    def __le__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is less than and equal to an element. """
+
+        # LHS operation
+
+        return self_data <= other
+    
+    @ndarray_elemwise_decor
+    def __rle__(
+        self_data: numpy.ndarray | cupy.ndarray,
+        other: numpy.ndarray | cupy.ndarray
+    ):
+        """ Checks whether current array is less than and equal to an element. """
+
+        # RHS operation
+
+        return other <= self_data
+
+    def __eq__(self, other: NDArray) -> NDArray:
+        """ Checks whether current array is equal to another array. """
+
+        assert isinstance(other, NDArray), f'Expected an NDArray, got {other}'
+        assert self.device == other.device, f'Attempt to compare arrays from different '
+        f'devices, found {self.device} and {other.device}'
+
+        res = self._data == other._data
+    
+        return NDArray._without_copy(
+            ndarray_ensure(res, self.device),
+            self.device
+        )
+    
+    def __ne__(self, other: NDArray) -> NDArray:
+        """ Checks whether current array is equal to another array. """
+
+        assert isinstance(other, NDArray), f'Expected an NDArray, got {other}'
+        assert self.device == other.device, f'Attempt to compare arrays from different '
+        f'devices, found {self.device} and {other.device}'
+
+        res = self._data != other._data
+
+        return NDArray._without_copy(
+            ndarray_ensure(res, self.device),
+            self.device
+        )
+    
+    def __getitem__(
+        self,
+        idx: int | slice | Tuple[int | slice]
+    ) -> NDArray:
+        """ Gets element(s) from given indicies. """
+
+        if isinstance(idx, tuple):
+            for i, ii in enumerate(idx):
+                assert isinstance(i, (int, slice)), f'Invalid index {ii} on {idx}[{i}]'
+        assert isinstance(idx, (int, slice)), f'Invalid index {idx}'
+
+        res = self._data.__getitem__(idx)
+
+        return NDArray._without_copy(ndarray_ensure(res, self.device), self.device)
+    
+    ## Does not create a new array
+    def __setitem__(
+        self,
+        idx: int | slice | Tuple[int | slice],
+        value: NDArray | any
+    ) -> None:
+        """ Sets element(s) to indicies of an array. """
+
+        if isinstance(idx, tuple):
+            for i, ii in enumerate(idx):
+                assert isinstance(i, (int, slice)), f'Invalid index {ii} on {idx}[{i}]'
+        assert isinstance(idx, (int, slice)), f'Invalid index {idx}'
+
+        if isinstance(value, NDArray):
+            value = value.migrate_to(self.device)._data
+        else:
+            assert isinstance(value, (int, float, bool)), f'Unexpected input, {value}'
+
+        self._data.__setitem__(idx, value)
 
     ## STATIC METHODS ##
 
@@ -246,7 +576,7 @@ class NDArray:
         doing any sanity check.
         """
 
-        assert isinstance(x, (device._backend.ndarray)), f'Device incompatible array provided'
+        assert isinstance(x, device._backend.ndarray), f'Device incompatible array provided'
 
         ndarray = NDArray.__new__(NDArray)
         ndarray._data = x
@@ -261,20 +591,14 @@ class NDArray:
     def log(x: NDArray, dtype: str = None):
         """ Performs element-wise natural log. """
 
-        res = x.device._backend.log(x._data, dtype=dtype)
-        x.device.sync()  # Sync current thread with GPU computation (if need be)
-
-        return res
+        return x.device._backend.log(x._data, dtype=dtype)
 
     @staticmethod
     @ndarray_static_decor_unary
     def exp(x: NDArray, dtype: str = None):
         """ Performs element-wise Euler's exponential. """
 
-        res = x.device._backend.exp(x._data, dtype=dtype)
-        x.device.sync()  # Sync current thread with GPU computation (if need be)
-
-        return res
+        return x.device._backend.exp(x._data, dtype=dtype)
 
     @staticmethod
     @ndarray_static_decor_unary
@@ -289,10 +613,7 @@ class NDArray:
                 for i, axis in enumerate(axes):
                     assert isinstance(axis, int), f'Invalid axis {axis} on index {i}'
 
-        res = x.device._backend.transpose(x._data, axes)
-        x.device.sync()  # Sync current thread with GPU computation (if need be)
-
-        return res
+        return x.device._backend.transpose(x._data, axes)
 
     @staticmethod
     @ndarray_static_decor_unary
@@ -301,10 +622,13 @@ class NDArray:
         axis1: int,
         axis2: int
     ) -> NDArray:
+        """ Swap two axis denoted by given indicies. """
+    
+        assert len(x.shape) >= 2, f'Array should consist atleast two dimensions'
         assert isinstance(axis1, int), f'Invalid axis1'
         assert isinstance(axis2, int), f'Invalid axis2'
 
-        return NDArray(x._data.swapaxes(axis1, axis2))
+        return x._data.swapaxes(axis1, axis2)
 
     @staticmethod
     def maximum(x, y, dtype: str = None) -> NDArray:
@@ -312,31 +636,37 @@ class NDArray:
 
         from soket import default_device
 
-        assert isinstance(x, (int, float, bool, list, tuple, NDArray)), f'Invalid input {x}'
-        assert isinstance(y, (int, float, bool, list, tuple, NDArray)), f'Invalid input {y}'
+        assert isinstance(x, (int, float, bool, NDArray)), f'Invalid input {x}'
+        assert isinstance(y, (int, float, bool, NDArray)), f'Invalid input {y}'
 
         x_ndarray_instance = isinstance(x, NDArray)
         y_ndarray_instance = isinstance(y, NDArray)
 
         if x_ndarray_instance and y_ndarray_instance:
             assert x.device == y.device, f'Incompatible devices {x.device} and {y.device}'
-
             device = x.device
+
+            # Check for appropriate type promotion.
+            if x.dtype != y.dtype:
+                dtype = str(promote_types(x.dtype, y.dtype))
+
+            x = x._data
+            y = y._data
         elif x_ndarray_instance or y_ndarray_instance:
             device = x.device if x_ndarray_instance else y.device
+            dtype = x.dtype if x_ndarray_instance else y.dtype
 
-            x = NDArray(x, device=device, dtype=dtype) if not x_ndarray_instance else x
-            y = NDArray(y, device=device, dtype=dtype) if not y_ndarray_instance else y
+            x = x._data if x_ndarray_instance else x
+            y = y._data if y_ndarray_instance else y
         else:
             device = default_device()
+            dtype = str(promote_types(
+                get_scalar_dtype(x),
+                get_scalar_dtype(y)
+            ))
 
-            x = NDArray(x, device=device, dtype=dtype)
-            y = NDArray(y, device=device, dtype=dtype)
-
-        res = device._backend.maximum(x._data, y._data, dtype=dtype)
-        device.sync()  # Sync current thread with GPU computation (if need be)
-
-        return NDArray(res, device=device)
+        res = device._backend.maximum(x, y, dtype=dtype)
+        return NDArray(ndarray_ensure(res, device), device=device)
 
     @staticmethod
     @ndarray_static_decor_unary
@@ -347,7 +677,20 @@ class NDArray:
         for i, s in enumerate(shape):
             assert isinstance(s, int), f'Invalid shape {s} on index {i}'
 
-        res = x.device._backend.broadcast_to(x._data, shape)
-        x.device.sync()  # Sync current thread with GPU computation (if need be)
+        return x.device._backend.broadcast_to(x._data, shape)
+    
+    @staticmethod
+    def stack(arrays: Sequence[NDArray], axis: int = 0, dtype: str = None):
+        """
+        Stacks a sequence of NDArrays. Default device is the first elements device.
+        """
 
-        return res
+        for array in arrays:
+            assert isinstance(array, NDArray), f'Expected a sequence of NDArrays'
+
+        device = arrays[0].device
+        return NDArray._without_copy(device._backend.stack(
+            [x._data for x in arrays],
+            axis=axis,
+            dtype=dtype
+        ), device)

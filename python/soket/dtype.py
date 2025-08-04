@@ -50,16 +50,16 @@ locals().update(_datatypes)
 default_datatype = _datatypes['float32']
 
 
-# Get soket datatype of a scalar.
-def get_scalar_dtype(scalar: int | float | bool) -> DType:
-    if isinstance(scalar, float):
-        return float32
-    elif isinstance(scalar, int):
+# Tensor datatypes for scalars.
+def get_scalar_dtype(scalar: any) -> DType:
+    if isinstance(scalar, int):
         return int32
+    elif isinstance(scalar, float):
+        return float32
     elif isinstance(scalar, bool):
-        return datatypes['bool']
-
-    raise TypeError(f'Unsupported scalar {scalar}')
+        return _datatypes['bool']
+    
+    raise ValueError(f'Unsupported scalar {scalar}')
 
 
 ## CUSTOM PROMOTER ##
@@ -116,7 +116,7 @@ _PROMOTION_TABLE = {
 
 # Construct the symmetric table
 _SYMMETRIC_PROMOTION_TABLE = {}
-for (a, b), result in _PROMOTION_TABLE:
+for (a, b), result in _PROMOTION_TABLE.items():
     _SYMMETRIC_PROMOTION_TABLE[(a, b)] = result
     _SYMMETRIC_PROMOTION_TABLE[(b, a)] = result
 

@@ -1,10 +1,15 @@
 from __future__ import annotations
 from typing import Tuple, List, Optional
 from types import ModuleType
-from .ndarray import NDArray
+from soket.dtype import default_datatype
+from .ndarray import NDArray, ndarray_ensure
 from cupy.cuda import Device as cupy_device
 import numpy
 import cupy
+
+
+## DEFAULT DATATYPE ##
+_def_dt = str(default_datatype)
 
 
 ## NOTE: Writing datatypes as strings is recommended for backend code instead of using soket.DType.
@@ -31,7 +36,7 @@ class Device:
 
     def __init__(self, type: str, id: Optional[int] = 0):
         assert isinstance(type, str) and type in _supported_devices, \
-            f'Invalid device type {type}'
+            f'Usupported device type {type}'
         assert isinstance(id, int), f'Invalid id {id}'
 
         self._type = type
@@ -132,21 +137,17 @@ class Device:
         # Generate random arrays
         rand_array = self._backend.random.rand(*shape)
 
-        # NumPy returns float if no shape is provided (scalar).
-        if self._type is DeviceType.CPU and len(shape) == 0:
-            rand_array = self._backend.array(rand_array, dtype=dtype)
-
-        return NDArray(rand_array, self)
+        return NDArray(ndarray_ensure(rand_array, self), self, dtype=dtype)
 
     def zeros(self, shape: Tuple[int] | List[int], dtype: str = None) -> NDArray:
         """ Return NDArray filled with zeros of the given shape. """
 
-        return NDArray(self._backend.zeros(shape, dtype=dtype), self)
+        return NDArray._without_copy(self._backend.zeros(shape, dtype=dtype), self)
 
     def ones(self, shape: Tuple[int] | List[int], dtype: str = None) -> NDArray:
         """ Return NDArray filled with ones of the given shape. """
 
-        return NDArray(self._backend.ones(shape, dtype=dtype), self)
+        return NDArray._without_copy(self._backend.ones(shape, dtype=dtype), self)
 
     def one_hot(self, i: NDArray, num_classes: int = 10, dtype: str = None):
         assert len(i.shape) == 1, 'Expected one dimensional NDArray, i'
@@ -155,12 +156,15 @@ class Device:
         if self != i.device:
             i = i.to(self)
 
-        return NDArray(self._backend_device.eye(num_classes)[i._data], dtype=dtype)
+        return NDArray._without_copy(
+            self._backend.eye(num_classes, dtype=dtype)[i._data],
+            self
+        )
 
     def empty(self, shape: Tuple[int] | List[int], dtype: str = None) -> NDArray:
         """ Return uninitialized NDArray of the given shape. """
 
-        return NDArray(self._backend.empty(shape, dtype=dtype), self)
+        return NDArray._without_copy(self._backend.empty(shape, dtype=dtype), self)
 
     def full(
         self, shape: Tuple[int] | List[int],
@@ -169,7 +173,10 @@ class Device:
     ) -> NDArray:
         """ Return an NDArray of the given shape filled with provided value. """
 
-        return NDArray(self._backend.full(shape, fill, dtype=dtype), self)
+        return NDArray._without_copy(
+            self._backend.full(shape, fill, dtype=dtype),
+            self
+        )
 
 
 ## DEFAULT DEVICE ##
@@ -178,7 +185,7 @@ _DEFAULT_DEVICE = Device(DeviceType.CPU, -1)
 def default_device() -> Device:
     return _DEFAULT_DEVICE
 
-# Devices supported by soket
+# Devices supported by Soket
 
 def cpu() -> Device:
     return Device(DeviceType.CPU, -1)

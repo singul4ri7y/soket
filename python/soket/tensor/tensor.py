@@ -29,7 +29,7 @@ def tensor_reduction_decor(func) -> function:
         self,
         axes: Tuple[int],
         dtype: DType = None,
-        keepdims: bool = True
+        keepdims: bool = False
     ):
         dtype = str(DType(dtype)) if dtype else None
 
@@ -44,6 +44,25 @@ def tensor_reduction_decor(func) -> function:
 
     return wrapper
 
+# Decorator for tensor max/min operations
+def tensor_max_min_decor(func) -> function:
+    @tensor_adjust_axes_decor
+    def wrapper(
+        self,
+        axes: Tuple[int],
+        keepdims: bool = False
+    ):
+        # Check for dimension index under/overshoot.
+        dimsiz = len(self.shape)
+        for i, axis in enumerate(axes):
+            assert isinstance(axis, int), f'Invalid axis: {axes}[{i}] = {axis}'
+            if axis < -dimsiz or axis >= dimsiz:
+                raise ValueError(f'Axis out of bounds: {axes}[{i}] = {axis}')
+
+        return func(self, axes, keepdims)
+
+    return wrapper
+
 
 class Tensor(Node):
     """ Represents a soket Tensor """
@@ -55,7 +74,7 @@ class Tensor(Node):
     grad: Tensor | List[Tensor] = None
 
     # Store the computed gradient even if the Node/Tensor is not leaf?
-    _force_grad: bool = False
+    _retain_grad: bool = False
 
     def __init__(
         self,
@@ -67,11 +86,15 @@ class Tensor(Node):
     ) -> None:
         assert isinstance(array, (list, tuple, int, float, bool, NDArray, Tensor)),  \
             f'Invalid input to tensor {array}'
+        
+        if device is not None:
+            assert isinstance(device, Device), f'Invalid device given {device}'
 
         dtype = str(DType(dtype)) if dtype else None
 
         if isinstance(array, Tensor):
             device = array.device if device is None else device
+            
             cached_data = NDArray(array.compute_cached_data(), dtype=dtype,
                 device=device)
         else:
@@ -281,15 +304,31 @@ class Tensor(Node):
 
         return Mean(observations, None if len(axes) == 0 else axes,
             dtype=dtype, keepdims=keepdims)(self)
+    
+    @tensor_max_min_decor
+    def max(self, axes, keepdims: bool = False) -> Tensor:
+        """ Returns the maximum value of all elements in the input tensor. """
+
+        return Max(None if len(axes) == 0 else axes, keepdims=keepdims)(self)
+    
+    @tensor_max_min_decor
+    def min(self, axes, keepdims: bool = False) -> Tensor:
+        """ Returns the minimum value of all elements in the input tensor. """
+
+        return Min(None if len(axes) == 0 else axes, keepdims=keepdims)(self)
 
     @tensor_adjust_axes_decor
     def reshape(self, shape: int | Tuple[int]) -> Tensor:
+        """ Reshape a tensor and return it. """
+
         assert isinstance(shape, (int, tuple)), f'Invalid shape {shape}'
         assert math.prod(shape) == self.size, 'Attempt to reshape to different number of elements'
         return Reshape(shape)(self)
 
     @tensor_adjust_axes_decor
     def permute(self, axes: int | Tuple[int]) -> Tensor:
+        """ Re-arrange the dimensions of a tensor. """
+
         assert len(axes) != 0, 'Expected a shape'
 
         # Check for dimension index under/overshoot.
@@ -302,35 +341,43 @@ class Tensor(Node):
         return Permute(axes)(self)
 
     def transpose(self) -> Tensor:
-        assert len(self.shape) >= 2, 'Tensor shape must be >= 2'
+        """ Transpose a tensor. In other words, permute last two dimensions. """
+
+        assert len(self.shape) >= 2, 'Tensor shape has to be atleast 2d'
         return Transpose()(self)
 
-    def argmax(self, axis=None, keepdims=False):
-        assert isinstance(axis, int), 'Expected axis to be an integer'
+    def argmax(self, axis: int = None, keepdims: bool = False):
+        """ Returns index tensor of the maximum values over an axis. """
+    
+        if axis is not None:
+            assert isinstance(axis, int), 'Expected axis to be an integer'
 
         return Tensor.make_const(self.compute_cached_data().
             argmax(axis=axis, keepdims=keepdims))
 
-    def argmin(self, axis=None, keepdims=False):
-        assert isinstance(axis, int), 'Expected axis to be an integer'
+    def argmin(self, axis: int = None, keepdims: bool = False):
+        """ Returns index tensor of the maximum values over an axis. """
+    
+        if axis is not None:
+            assert isinstance(axis, int), 'Expected axis to be an integer'
 
         return Tensor.make_const(self.compute_cached_data().
             argmin(axis=axis, keepdims=keepdims))
 
-    def item(self):
+    def item(self) -> any:
         """ Gets the scalar value of a scalar Tensor. """
 
         assert self.size == 1, 'Tensor must hold only one value to call item()'
 
         return self.compute_cached_data().item()
 
-    def force_grad(self):
-        """ Forces the tensor to store the computed gradient in tensor.grad
-        field even if it's not leaf node.
+    def retain_grad(self):
+        """
+        Forces a leaf tensor to store the computed gradient in tensor.grad
+        field.
         """
 
-        self._force_grad = True
-
+        self._retain_grad = True
 
     ## DUNDER METHODS ##
 
@@ -352,147 +399,277 @@ class Tensor(Node):
     ## DUNDER OPERATIONS ##
 
     def __add__(self, other: Tensor | any) -> Tensor:
-        """ Adds and returns two Tensors (also supports scalar addtion). """
-
-        # Check if devices are compatible
-        assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+        """ Adds and returns two tensors (also supports scalar addition). """
 
         if isinstance(other, Tensor):
+            # Check if devices are compatible
+            assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+        
             return EWiseAdd()(self, other)
 
         assert isinstance(other, (int, float, bool)), f'Invalid appends {other}'
         return AddScalar(other)(self)
-
-    def __sub__(self, other: Tensor | any) -> Tensor:
-        if isinstance(other, Tensor):
-            return EWiseAdd()(self, -other)
-        return AddScalar(-other)(self)
-
-    def __mul__(self, other: Tensor | any) -> Tensor:
-        if isinstance(other, Tensor):
-            return EWiseMul()(self, other)
-        return MulScalar(other)(self)
-
-    def __truediv__(self, other: Tensor | any) -> Tensor:
-        if isinstance(other, Tensor):
-            return EWiseDiv()(self, other)
-        return DivScalar(other)(self)
+    
+    __radd__ = __add__
 
     def __neg__(self) -> Tensor:
+        """ Returns a negated tensor. """
+
         return Negate()(self)
 
-    def __rsub__(self, other: Tensor | any) -> Tensor:
+    def __sub__(self, other: Tensor | any) -> Tensor:
+        """ Subtracts two tensors and returns it (LHS). Supports scalar subtraction. """
+
+        ## LHS operator
+
         if isinstance(other, Tensor):
-            return EWiseAdd()(-self, other)
-        return AddScalar(other)(-self)
+            # Check if devices are compatible
+            assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+        
+            return EWiseSub()(self, other)
+
+        assert isinstance(other, (int, float, bool)), f'Invalid subtrahend {other}'
+        return SubScalar(other)(self)
+    
+    def __rsub__(self, other: any) -> Tensor:
+        """
+        Subtracts two tensors and returns it (RHS). This function might only be
+        used when subtracting a tensor from a scalar.
+        """
+
+        ## RHS operator
+    
+        assert isinstance(other, (int, float, bool)), f'Invalid minuend {other}'
+        return SubScalar(other, commute=True)(self)
+
+    def __mul__(self, other: Tensor | any) -> Tensor:
+        """ Multiplies and returns two tensors (also supports scalar multiplication). """
+
+        if isinstance(other, Tensor):
+            # Check if devices are compatible
+            assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+        
+            return EWiseMul()(self, other)
+
+        assert isinstance(other, (int, float, bool)), f'Invalid multiplicand {other}'
+        return MulScalar(other)(self)
+    
+    __rmul__ = __mul__
+
+    def __truediv__(self, other: Tensor | any) -> Tensor:
+        """ Divides a tensor and returns the result. Supports scalar operation. """
+
+        if isinstance(other, Tensor):
+            # Check if devices are compatible
+            assert self.device == other.device, f'Incompatible devices {self.device} and {other.device}'
+        
+            return EWiseDiv()(self, other)
+
+        assert isinstance(other, (int, float, bool)), f'Invalid divisor {other}'
+        return DivScalar(other)(self)
+    
+    def __rtruediv__(self, other: Tensor | any) -> Tensor:
+        """ Divides a tensor and returns the result. Supports scalar operation. """
+        """
+        This function will only be called when a scalar is being divided by
+        a tensor.
+        """
+
+        assert isinstance(other, (int, float, bool)), f'Invalid dividend {other}'
+        return DivScalar(other, commute=True)(self)
+    
+    def __pow__(self, pow: Tensor | any) -> Tensor:
+        """ Raise tensor to a power. """
+
+        if isinstance(pow, Tensor):
+            # Check if devices are compatible
+            assert self.device == pow.device, f'Incompatible devices {self.device} and {pow.device}'
+        
+            return EWisePow()(self, pow)
+        
+        assert isinstance(pow, (int, float, bool)), f'Invalid power {pow}'
+        return PowerScalar(pow)(self)
+    
+    def __rpow__(self, pow: any) -> Tensor:
+        """ Raise tensor to a power. """
+        """
+        This function will only be called in situations when scalar is
+        raised to a power
+        """
+
+        assert isinstance(pow, (int, float, bool)), f'Invalid power {pow}'
+        return PowerScalar(pow, commute=True)(self)
 
     def __matmul__(self, other: Tensor) -> Tensor:
+        """ Perform matrix-matrix multiplication of two tensors. """
+    
+        assert isinstance(other, Tensor), f'Expected tensor, found {other}'
+        
+        # Check for device compatibility
+        assert self.device == other.device, f'Attempt to matrix multiply tensors from '
+        f'different devices, {self.device} and {other.device}'
+
         assert len(self.shape) >= 2, f'Tensor should atleast have 2 dimensions, shape: {self.shape}'
         assert len(other.shape) >= 2, f'Tensor should atleast have 2 dimensions, shape: {other.shape}'
         assert self.shape[-1] == other.shape[-2], 'Tensor dimensions should be compatible for matmul'
 
         return MatMul()(self, other)
 
-    def __pow__(self, pow: Tensor | any) -> Tensor:
-        if isinstance(pow, Tensor):
-            return EWisePow()(self, pow)
-        return PowerScalar(pow)(self)
+    ## FOLLOWING OPERATIONS RESULTS DO NOT TAKE PART IN COMPUTATIONAL GRAPH. ##
 
-    def __rpow__(self, pow: any) -> Tensor:
-        """ This function will only be called in situations when scalar is
-        raised to a power
-        """
+    def __gt__(self, other: Tensor | any) -> Tensor:
+        """ Checks whether current tensor is greater than given element. """
 
-        from .creation import full
+        # LHS operation
 
-        tensor = full(self.shape, c=pow)
-        return EWisePow()(tensor, self)
+        if isinstance(other, Tensor):
+            assert self.device == other.device, f'Expected the tensors to be in same device'
+            f', found {self.device} and {other.device}'
+        
+            res = self.compute_cached_data() > other.compute_cached_data()
+        elif isinstance(other, (int, float, bool)):
+            res = self.compute_cached_data() > other
+        else:
+            raise ValueError(f'Invalid RHS value {other}')
 
-    __radd__ = __add__
-    __rmul__ = __mul__
+        return Tensor.make_const(res, requires_grad=False)
+    
+    def __rgt__(self, other: any) -> Tensor:
+        """ Checks whether current tensor is greater than given element. """
 
-    ## Methods below are not part of computational grpah ##
-    ## Hence, there is no lazy evaluation because no input tensor is stored ##
+        # RHS operation
 
-    def __gt__(self, other) -> Tensor:
-        """ Greater than """
-        cached_data = self.compute_cached_data() > other.compute_cached_data() \
-            if isinstance(other, Tensor) else self.compute_cached_data() > other
-
-        return Tensor.make_const(cached_data, requires_grad=False)
+        assert isinstance(other, (int, float, bool)), f'Invalid LHS value {other}'
+        return Tensor.make_const(other > self.compute_cached_data(),
+            requires_grad=False)
 
     def __ge__(self, other) -> Tensor:
-        """ Greater than and equal """
-        cached_data = self.compute_cached_data() >= other.compute_cached_data() \
-            if isinstance(other, Tensor) else self.compute_cached_data() >= other
+        """ Checks whether current tensor is greater than or equal to given element. """
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        # LHS operation
 
-    def __rgt__(self, other) -> Tensor:
-        """ Greater than (RHS)"""
-        cached_data = other.compute_cached_data() > self.compute_cached_data() \
-            if isinstance(other, Tensor) else other > self.compute_cached_data()
+        if isinstance(other, Tensor):
+            assert self.device == other.device, f'Expected the tensors to be in same device'
+            f', found {self.device} and {other.device}'
+        
+            res = self.compute_cached_data() >= other.compute_cached_data()
+        elif isinstance(other, (int, float, bool)):
+            res = self.compute_cached_data() >= other
+        else:
+            raise ValueError(f'Invalid RHS value {other}')
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        return Tensor.make_const(res, requires_grad=False)
 
     def __rge__(self, other) -> Tensor:
-        """ Greater than and equal (RHS) """
-        cached_data = other.compute_cached_data() >= self.compute_cached_data() \
-            if isinstance(other, Tensor) else other >= self.compute_cached_data()
+        """ Checks whether current tensor is greater than or equal to given element. """
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        # RHS operation
 
-    def __lt__(self, other) -> Tensor:
-        """ Less than """
-        cached_data = self.compute_cached_data() < other.compute_cached_data() \
-            if isinstance(other, Tensor) else self.compute_cached_data() < other
+        assert isinstance(other, (int, float, bool)), f'Invalid LHS value {other}'
+        return Tensor.make_const(other >= self.compute_cached_data(),
+            requires_grad=False)
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+    def __lt__(self, other: Tensor | any) -> Tensor:
+        """ Checks whether current tensor is less than given element. """
+
+        # LHS operation
+
+        if isinstance(other, Tensor):
+            assert self.device == other.device, f'Expected the tensors to be in same device'
+            f', found {self.device} and {other.device}'
+        
+            res = self.compute_cached_data() < other.compute_cached_data()
+        elif isinstance(other, (int, float, bool)):
+            res = self.compute_cached_data() < other
+        else:
+            raise ValueError(f'Invalid RHS value {other}')
+
+        return Tensor.make_const(res, requires_grad=False)
+    
+    def __rlt__(self, other: any) -> Tensor:
+        """ Checks whether current tensor is less than given element. """
+
+        # RHS operation
+
+        assert isinstance(other, (int, float, bool)), f'Invalid LHS value {other}'
+        return Tensor.make_const(other < self.compute_cached_data(),
+            requires_grad=False)
 
     def __le__(self, other) -> Tensor:
-        """ Less than and equal """
-        cached_data = self.compute_cached_data() <= other.compute_cached_data() \
-            if isinstance(other, Tensor) else self.compute_cached_data() <= other
+        """ Checks whether current tensor is less than or equal to given element. """
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        # LHS operation
 
-    def __rlt__(self, other) -> Tensor:
-        """ Less than (RHS)"""
-        cached_data = other.compute_cached_data() < self.compute_cached_data() \
-            if isinstance(other, Tensor) else other < self.compute_cached_data()
+        if isinstance(other, Tensor):
+            assert self.device == other.device, f'Expected the tensors to be in same device'
+            f', found {self.device} and {other.device}'
+        
+            res = self.compute_cached_data() <= other.compute_cached_data()
+        elif isinstance(other, (int, float, bool)):
+            res = self.compute_cached_data() <= other
+        else:
+            raise ValueError(f'Invalid RHS value {other}')
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        return Tensor.make_const(res, requires_grad=False)
 
     def __rle__(self, other) -> Tensor:
-        """ Less than and equal (RHS) """
-        cached_data = other.compute_cached_data() <= self.compute_cached_data() \
-            if isinstance(other, Tensor) else other <= self.compute_cached_data()
+        """ Checks whether current tensor is less than or equal to given element. """
 
-        return Tensor.make_const(cached_data, requires_grad=False)
+        # RHS operation
+
+        assert isinstance(other, (int, float, bool)), f'Invalid LHS value {other}'
+        return Tensor.make_const(other <= self.compute_cached_data(),
+            requires_grad=False)
 
     def __eq__(self, other: Tensor) -> Tensor:
+        """ Check whether two tensors are equal. """
+
+        assert isinstance(other, Tensor), f'Expected a tensor in RHS, found {other}'
+        assert self.device == other.device, f'Attempt to compare Tensors from different '
+        f'devices, found {self.device} and {other.device}'
+
         return Tensor.make_const(self.compute_cached_data() ==
-            other.compute_cached_data())
+            other.compute_cached_data(), requires_grad=False)
 
     def __ne__(self, other: Tensor) -> Tensor:
-        return Tensor.make_const(self.compute_cached_data() !=
-            other.compute_cached_data())
+        """ Check whether two tensors are not equal. """
 
-    def __getitem__(self, idx: int | slice | Tuple[int | slice]):
+        assert isinstance(other, Tensor), f'Expected a tensor in RHS, found {other}'
+        assert self.device == other.device, f'Attempt to compare Tensors from different '
+        f'devices, found {self.device} and {other.device}'
+
+        return Tensor.make_const(self.compute_cached_data() !=
+            other.compute_cached_data(), requires_grad=False)
+
+    def __getitem__(self, idx: int | slice | Tuple[int | slice]) -> Tensor:
+        """ Get element(s) from indicies. """
+
+        if isinstance(idx, tuple):
+            for i, ii in enumerate(idx):
+                assert isinstance(i, (int, slice)), f'Invalid index {ii} on {idx}[{i}]'
+        assert isinstance(idx, (int, slice)), f'Invalid index {idx}'
+    
         return Select(idx)(self)
 
     def __setitem__(
         self,
         idx: int | slice | Tuple[int | slice],
-        value
-    ):
-        assert self.requires_grad is False, 'Cannot set value to a parameter'
+        value: Tensor | any
+    ) -> None:
+        """ Set element(s) to indicies of a tensor. """
+
+        assert self.requires_grad is False, 'Cannot set value to a parameter!'
+
+        if isinstance(idx, tuple):
+            for i, ii in enumerate(idx):
+                assert isinstance(i, (int, slice)), f'Invalid index {ii} on {idx}[{i}]'
+        assert isinstance(idx, (int, slice)), f'Invalid index {idx}'
 
         if isinstance(value, Tensor):
             value = value.compute_cached_data()
-        elif isinstance(value, numpy):
-            value = value.tolist()
+        else:
+            assert isinstance(value, (int, float, bool)), f'Unexpected input, {value}'
 
-        return Tensor.make_const(self.compute_cached_data().__setitem__(
-            idx, value
-        ))
+        ## NO NEED TO CHECK FOR DEVICE COMPATIBILITY.
+
+        self.compute_cached_data().__setitem__(idx, value)

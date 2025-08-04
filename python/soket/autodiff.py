@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional, List, Tuple
 from soket.ops import Op
-from soket.backend.numpy import NDArray
+from soket.backend import NDArray
 
 class Node:
     """ Represents a single Node in computational graph """
@@ -142,7 +142,7 @@ def compute_gradient(out, grad):
 
         # If the node is not being forced to store the gradient and is not a
         # leaf node, discard the gradient (and free some memory).
-        if not node._force_grad and not node.is_leaf:
+        if not node._retain_grad and not node.is_leaf:
             del node.grad
             node.grad = None
 
