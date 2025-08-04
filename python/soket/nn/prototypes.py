@@ -267,7 +267,7 @@ class Dropout(Module):
         if self.training:
             # Mask with keep rates.
             keep_rate = 1 - self.p
-            binomial_mask = soket.randb(*X.shape, p=keep_rate, dtype=X.dtype)
+            binomial_mask = soket.randb(*X.shape, prob=keep_rate, dtype=X.dtype)
             return (X * binomial_mask) / (keep_rate)
         else:
             return X

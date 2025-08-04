@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Optional, List, Tuple
 from soket.ops import Op
-from soket.backend.numpy import NDArray
+from soket.backend import NDArray
 
 class Node:
     """ Represents a single Node in computational graph """
@@ -48,7 +48,8 @@ class Node:
         cached_data: Optional[NDArray] = None,
         requires_grad: Optional[bool] = None
     ):
-        """ Initializes and populates Node/Tensor fields.
+        """
+        Initializes and populates Node/Tensor fields.
 
         Parameters
         ----------
@@ -63,6 +64,7 @@ class Node:
 
         requires_grad: Optional[bool]
         """
+
         # If input tensors gradients are being computed, the output nodes
         # (this node) gradient should be calculated as well.
         if requires_grad is None:
@@ -80,9 +82,12 @@ class Node:
 
 
 def make_gradient_compatible(node: Node):
-    """ There might be some cases when operation might use broadcasting to match shapes.
+    """
+    There might be some cases when operation might use broadcasting to match shapes.
     If the a node/tensor ends up getting broadcasted, there might be chances the gradient
-    will not match the shape of the tensor. Use summation to make up for that. """
+    will not match the shape of the tensor. Use summation to make up for that.
+    """
+
     if node.shape == node.grad.shape:
         # Nothing to do
         return
@@ -137,7 +142,7 @@ def compute_gradient(out, grad):
 
         # If the node is not being forced to store the gradient and is not a
         # leaf node, discard the gradient (and free some memory).
-        if not node._force_grad and not node.is_leaf:
+        if not node._retain_grad and not node.is_leaf:
             del node.grad
             node.grad = None
 
@@ -186,6 +191,7 @@ def reversed_topological_sort_and_init(out_node: Node) -> List[Node]:
 
 def sum_node_list(node_list):
     """ Custom sum function in order to avoid create redundant nodes in Python sum implementation. """
+
     from operator import add
     from functools import reduce
 

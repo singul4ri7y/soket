@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import List, Tuple
 from abc import ABC, abstractmethod
 from soket import Tensor
+import numpy
 
 class Transform(ABC):
     def __call__(self, *args, **kwargs):
@@ -24,16 +25,22 @@ class Compose(Transform):
     def __init__(self, transforms: List[Transform] | Tuple[Transform]):
         for t in transforms:
             assert isinstance(t, Transform)
-        
+
         self.transforms = transforms
 
     def transform(self, X):
         for tform in self.transforms:
             X = tform(X)
-        
+
         return X
 
 
 class ToTensor(Transform):
-    def transform(self, X: List) -> Tensor:
-        return Tensor(X, dtype=X.dtype)
+    """ Transforms a NumPy data sample to Tensor. """
+
+    def transform(self, X) -> Tensor:
+        # Convert the data sample to numpy.ndarray
+        if not isinstance(X, numpy.ndarray):
+            X = numpy.array(X)
+    
+        return Tensor.from_numpy(X)
