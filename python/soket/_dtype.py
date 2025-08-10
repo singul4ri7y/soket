@@ -58,7 +58,7 @@ def get_scalar_dtype(scalar: any) -> DType:
         return float32
     elif isinstance(scalar, bool):
         return _datatypes['bool']
-    
+
     raise ValueError(f'Unsupported scalar {scalar}')
 
 
