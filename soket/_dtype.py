@@ -120,6 +120,8 @@ for (a, b), result in _PROMOTION_TABLE.items():
     _SYMMETRIC_PROMOTION_TABLE[(a, b)] = result
     _SYMMETRIC_PROMOTION_TABLE[(b, a)] = result
 
+print(_SYMMETRIC_PROMOTION_TABLE)
+
 for f in _supported_dtypes[:3]:
     for other in _supported_dtypes[3:-1]:
         _SYMMETRIC_PROMOTION_TABLE[(f, other)] = f
