@@ -47,7 +47,7 @@ cdef class DType:
 
                     # Store the index to use in promotion matrix
                     self._idx = i
-            
+
             if not found:
                 raise ValueError(f"Unsupported datatype '{type}'")
         else:
@@ -65,16 +65,6 @@ cdef class DType:
 
     ## CDEF METHODS ##
 
-    cdef bint _eq(self, DType other):
-        ''' Test equality (C only). '''
-        
-        return self._idx == other._idx
-
-    cdef bint _ne(self, DType other):
-        ''' Test inequality (C only). '''
-
-        return not self._eq(other)
-    
     cdef str _str(self):
         ''' Get string representation (C only). '''
 
@@ -142,6 +132,24 @@ cdef DType _bool  = DType('bool')
 # Default datatype for any type of tensor creation in Soket
 cdef DType _default_datatype = float32
 
+# Define datatypes in Python scope
+locals().update({
+    'bool': _bool,
+
+    'int8': int8,
+    'int16': int16,
+    'int32': int32,
+    'int64': int64,
+    'uint8': uint8,
+    'uint16': uint16,
+    'uint32': uint32,
+    'uint64': uint64,
+
+    'float16': float16,
+    'float32': float32,
+    'float64': float64,
+})
+
 ## DATATYPES END ##
 
 
@@ -155,7 +163,7 @@ cdef DType _get_scalar_dtype(scalar: int | float | bool):
         return float32
     elif Py_TYPE(scalar) is <PyTypeObject *> bool:
         return _bool
-    
+
     raise ValueError(f"Unsupported scalar '{scalar}'")
 
 
@@ -185,7 +193,7 @@ cpdef DType promote_types(DType type_a, DType type_b):
     # Do nothing if they are equal.
     if a_id == b_id:
         return type_a
-    
+
     # Boolean holds least rank in dtype, thus should
     # always be casted to other provided dtype
     if a_id == _bool._idx: return type_b

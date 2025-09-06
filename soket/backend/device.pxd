@@ -55,7 +55,7 @@ cdef class Device:
 
     cdef object _rand(self, tuple shape, object low, object high, str dtype)
     cdef object _randn(self, tuple shape, object mean, object std, str dtype)
-    cdef object _randb(self, tuple shape, object prob, str dtype)
+    cdef object _randb(self, tuple shape, object p, str dtype)
     cdef object _zeros(self, tuple shape, str dtype)
     cdef object _ones(self, tuple shape, str dtype)
     cdef object _one_hot(self, object i, object num_classes, str dtype)

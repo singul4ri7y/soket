@@ -1,0 +1,20 @@
+[project]
+name = "soket"
+version = "0.0.1"
+authors = [
+    { name = "SD Asif Hossein", email = "s.dah.ingularity47@gmail.com" }
+]
+maintainers = [
+    { name = "SD Asif Hossein", email = "s.dah.ingularity47@gmail.com" }
+]
+description = "A minimalistic PyTorch-like deep learning framework with strong GPU acceleration"
+requires-python = ">=3.13"
+dependencies = ["numpy>=2.3"]
+license = { text = "BSD-3-Clause" }
+
+[project.optional-dependencies]
+gpu = ["cupy"]
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel", "cython", "numpy>=2.3"]
+build-backend = "setuptools.build_meta"

@@ -52,7 +52,7 @@ cdef class Device:
         if self._dev_idx == DeviceType.GPU:
             if not _gpu_available:
                 raise RuntimeError(f'Cannot create a GPU device. Check warnings.')
-            
+
             # Set backend device and also keep handle to GPU/CUDA device
             self._backend = cupy
             self._backend_device = cupy_device(id)
@@ -71,7 +71,7 @@ cdef class Device:
         self._full_fn = self._backend.full
 
     ## DUNDER METHODS ##
-    
+
     def __enter__(self) -> Device:
         ''' When enter `with` block. '''
 
@@ -99,27 +99,27 @@ cdef class Device:
 
         # Device does not handle any exception
         return False
-    
+
     def __eq__(self, other: Device) -> bool:
         ''' Check whether two devices are equal. '''
 
         if Py_TYPE(other) is not <PyTypeObject *> Device:
             return False
         return self._eq(other)
-    
+
     def __ne__(self, other: Device) -> bool:
         ''' Check whether two devices are not equal. '''
 
         if Py_TYPE(other) is not <PyTypeObject *> Device:
             return False
         return self._ne(other)
-    
+
     def __str__(self) -> str:
         ''' String representation of a device. '''
 
         cdef char[64] repr
         cdef Py_ssize_t length
-        
+
         if self._dev_idx == DeviceType.GPU:
             memcpy(repr, 'soket.Device(GPU, ', 18 * sizeof(char))
             length = 18 + snprintf(repr + 18, 45, '%d', self._id)
@@ -128,12 +128,12 @@ cdef class Device:
         else:
             length = 17
             memcpy(repr, 'soket.Device(CPU)', length * sizeof(char))
-        
+
         # Add termination character
         repr[length] = '\0'
 
         return PyUnicode_DecodeUTF8(repr, length, NULL)
-    
+
     def __repr__(self) -> str:
         ''' Representation of a device. '''
 
@@ -145,7 +145,7 @@ cdef class Device:
 
     cdef bint _eq(self, Device other):
         ''' Check whether two devices are equal (C only). '''
-    
+
         # Python scope forward declaration
         cdef bint is_equal
 
@@ -154,14 +154,14 @@ cdef class Device:
             is_equal &= <bint> self._backend_device.__eq__(other._backend_device)
 
         return is_equal
-    
+
     cdef bint _ne(self, Device other):
         ''' Check whether two devices are not equal (C only). '''
 
         return not self._eq(other)
-    
+
     ## CDEF METHODS END ##
-    
+
     ## PROPERTIES ##
 
     @property
@@ -169,7 +169,7 @@ cdef class Device:
         ''' Returns the device type. '''
 
         return <DeviceType> self._dev_idx
-    
+
     @property
     def id(self) -> int:
         ''' Returns the device ID being used (GPU only). '''
@@ -178,7 +178,7 @@ cdef class Device:
 
         if self._dev_idx == DeviceType.GPU:
             id = self._id
-        
+
         return id
 
     ## PROPERTIES END ##
@@ -190,7 +190,7 @@ cdef class Device:
 
         if self._dev_idx == DeviceType.GPU:
             self._backend_device.use()
-    
+
     cpdef void sync(self):
         ''' Synchronizes current thread to the device. '''
 
@@ -205,53 +205,44 @@ cdef class Device:
         '''
         Returns samples from an uniform distribution of interval [low, high).
         '''
-    
-        if self._dev_idx == DeviceType.GPU:
-            return self._rand_fn(low, high, shape, dtype)
-        
+
         return self._rand_fn(low, high, shape).astype(dtype)
 
     cdef object _randn(self, tuple shape, object mean, object std, str dtype):
         '''
         Returns samples from a normal distribution of provided mean and variance.
         '''
-    
-        if self._dev_idx == DeviceType.GPU:
-            return self._randn_fn(mean, std, shape, dtype)
-        
+
         return self._rand_fn(mean, std, shape).astype(dtype)
-    
-    cdef object _randb(self, tuple shape, object prob, str dtype):
+
+    cdef object _randb(self, tuple shape, object p, str dtype):
         '''
         Creates and returns a binomial distribution of given probability and
         single trial per sample.
         '''
 
-        if self._dev_idx == DeviceType.GPU:
-            return self._binomial_fn(1, prob, shape, dtype)
-        
-        return self._binomial_fn(1, prob, shape).astype(dtype)
-    
+        return self._binomial_fn(1, p, shape).astype(dtype)
+
     cdef object _zeros(self, tuple shape, str dtype):
         ''' Return tensor/ndarray filled with zeros. '''
 
         return self._zeros_fn(shape, dtype)
-    
+
     cdef object _ones(self, tuple shape, str dtype):
         ''' Returns tensor/ndarray filled with ones. '''
 
         return self._ones_fn(shape, dtype)
-    
+
     cdef object _one_hot(self, object i, object num_classes, str dtype):
         ''' Returns a one-hot encoded tensor/ndarray. '''
 
         return self._eye_fn(num_classes, None, 0, dtype).__getitem__(i)
-    
+
     cdef object _empty(self, tuple shape, str dtype):
         ''' Return an uninitialized tensor/ndarray. '''
 
         return self._empty_fn(shape, dtype)
-    
+
     cdef object _full(self, tuple shape, object fill, str dtype):
         ''' Returns a tensor/ndarray filled with some value. '''
 
@@ -285,11 +276,11 @@ def gpu(id: int = None):
 
     if not _gpu_available:
         raise RuntimeError(f'Cannot create a GPU device. Check warnings.')
-    
+
     # Return default GPU device
     if id is None or id == 0:
         return _gpu_device_default
-    
+
     return Device(DeviceType.GPU, id)
 
 ## DEVICE FN END ##

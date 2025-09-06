@@ -1,1 +1,1 @@
-from .device import Device, DeviceType
+from soket.backend.device import Device, DeviceType, cpu, gpu

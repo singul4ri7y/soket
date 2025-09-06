@@ -1,1 +1,1 @@
-from .tensor cimport Tensor
+from soket.tensor.tensor cimport *
