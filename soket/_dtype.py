@@ -58,7 +58,7 @@ def get_scalar_dtype(scalar: any) -> DType:
         return float32
     elif isinstance(scalar, bool):
         return _datatypes['bool']
-    
+
     raise ValueError(f'Unsupported scalar {scalar}')
 
 
@@ -119,6 +119,8 @@ _SYMMETRIC_PROMOTION_TABLE = {}
 for (a, b), result in _PROMOTION_TABLE.items():
     _SYMMETRIC_PROMOTION_TABLE[(a, b)] = result
     _SYMMETRIC_PROMOTION_TABLE[(b, a)] = result
+
+print(_SYMMETRIC_PROMOTION_TABLE)
 
 for f in _supported_dtypes[:3]:
     for other in _supported_dtypes[3:-1]:
