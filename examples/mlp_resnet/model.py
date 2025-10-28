@@ -1,11 +1,12 @@
 from __future__ import annotations
 from typing import Type, Tuple
-from soket import Tensor, exp
+from soket import Tensor
 from soket.transforms import ToTensor
 from soket.optim import Adam, Optimizer
 from soket.utils.data import DataLoader
 from soket.utils.data.datasets import MNIST
 from soket.nn.init import kaiming_normal
+import soket
 import soket.nn as nn
 
 
@@ -62,10 +63,10 @@ def mlp_resnet_get_accuracy(Z: Tensor, y: Tensor) -> float:
 
     # Apply softmax on logits then find and compare argmax to
     # calculate the accuracy.
-    e = exp(Z - Z.max(-1, keepdims=True))
+    e = soket.exp(Z - Z.max(-1, keepdims=True))
     softmax = e / e.sum(-1, keepdims=True)
 
-    return (softmax.argmax(-1) == y).mean().item()
+    return (softmax.argmax(-1) == y).mean(dtype=soket.float32).item()
 
 
 def mlp_resnet_epoch(
@@ -134,12 +135,12 @@ def train_and_test_mlp_resnet_with_mnist(
 
     optim = optimizer(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    model.train()
+    model.train(True)
     for e in range(epochs):
         train_loss, train_acc = mlp_resnet_epoch(model, train_loader, optim)
         print(f'Epoch: {e}, train loss: {train_loss}, train acc: {train_acc * 100} %')
 
-    model.eval()
+    model.train(False)
     test_loss, test_acc = mlp_resnet_epoch(model, test_loader)
     print(f'Test loss: {test_loss}, test acc: {test_acc * 100} %')
 
