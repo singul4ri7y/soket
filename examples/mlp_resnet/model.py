@@ -146,7 +146,7 @@ def train_and_test_mlp_resnet_with_mnist(
 
 if __name__ == '__main__':
     train_and_test_mlp_resnet_with_mnist(
-        batch_size=250,
+        batch_size=500,
         epochs=10,
         lr=0.01,
         weight_decay=0.01,
