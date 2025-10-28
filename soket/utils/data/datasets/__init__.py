@@ -1,0 +1,1 @@
+from soket.utils.data.datasets.mnist import MNIST
