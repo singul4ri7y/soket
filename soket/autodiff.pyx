@@ -2,8 +2,8 @@ from cpython.ref cimport Py_XDECREF
 from cpython.object cimport PyObject, Py_TYPE, PyTypeObject
 from cpython.list cimport (PyList_New, PyList_Append, PyList_GET_ITEM,
     PyList_GET_SIZE)
-from cpython.tuple cimport (PyTuple_New, PyTuple_SET_ITEM)
-from soket.tensor cimport Tensor, OpType, OpInput, BackwardOutput
+from cpython.tuple cimport PyTuple_New, PyTuple_SET_ITEM
+from soket.tensor cimport Tensor, OpType, TensorTriad, TensorTriad
 from soket.tensor.ops.intern cimport _sum, _reshape
 from libc.stdlib cimport malloc, realloc, free
 from libc.string cimport memcmp, memcpy
@@ -38,7 +38,7 @@ cdef inline Tensor _sum_nodes(list nodes):
     for i in range(1, size):
         res = res._add(<Tensor> PyList_GET_ITEM(nodes, i))
 
-    return res
+    return res._detach()
 
 cdef inline void _make_gradient_compatible(Tensor node):
     '''
@@ -98,7 +98,7 @@ cdef inline void _make_gradient_compatible(Tensor node):
     grad._nshape = node._nshape
 
     # Finally, update the data
-    grad._data = data
+    grad._data_ = data
 
 ## HELPER FUNCTIONS END ##
 
@@ -110,9 +110,9 @@ cdef void _compute_gradient(Tensor node, Tensor adj):
     '''
 
     # Python scope forward declaration
-    cdef Tensor n, in_x, in_y
-    cdef OpInput inputs
-    cdef BackwardOutput bw_output
+    cdef Tensor n, in_x, in_y, in_Z
+    cdef TensorTriad inputs
+    cdef TensorTriad bw_output
 
     # Perform topological sort.
     cdef PyObject **sorted_nodes
@@ -125,7 +125,7 @@ cdef void _compute_gradient(Tensor node, Tensor adj):
     for i in range(sorted_nodes_len - 1, -1, -1):
         n = <Tensor> sorted_nodes[i]
 
-        # Sum the partial gradients
+        # Sum the partial adjoints
         n._grad = _sum_nodes(<list> n._grad)
         _make_gradient_compatible(n)
 
@@ -134,18 +134,22 @@ cdef void _compute_gradient(Tensor node, Tensor adj):
             inputs = n._inputs
             in_x = <Tensor> inputs.x if inputs.x != NULL else <Tensor> None
             in_y = <Tensor> inputs.y if inputs.y != NULL else <Tensor> None
+            in_Z = <Tensor> inputs.Z if inputs.Z != NULL else <Tensor> None
 
             bw_output = n._op.bwd(
                 n, <Tensor> n._grad,
-                in_x, in_y
+                in_x, in_y, in_Z
             )
 
             # Accumulate partial adjoints
-            if bw_output.x != NULL and in_x._requires_grad:
+            if in_x._requires_grad:
                 PyList_Append(in_x._grad, <object> bw_output.x)
 
             if bw_output.y != NULL and in_y._requires_grad:
                 PyList_Append(in_y._grad, <object> bw_output.y)
+
+            if bw_output.Z != NULL and in_Z._requires_grad:
+                PyList_Append(in_Z._grad, <object> bw_output.Z)
 
             # If the node is not forced to store the gradient and is not a
             # leaf node/tensor, discard the gradient (and hopefully free some
@@ -153,12 +157,13 @@ cdef void _compute_gradient(Tensor node, Tensor adj):
             if not n._retain_grad:
                 n._grad = None
 
-            # Objects in BackwardOutput structure has manually increased
+            # Objects in TensorTriad structure has manually increased
             # reference count. Decrease to balance.
             Py_XDECREF(bw_output.x)
             Py_XDECREF(bw_output.y)
+            Py_XDECREF(bw_output.Z)
 
-    # Allocated in `_topological_sort_and_init`
+    # Allocated in `_topological_sort_and_init` function
     free(sorted_nodes)
 
 
@@ -181,7 +186,7 @@ cdef (PyObject **, int) _topological_sort_and_init(Tensor node):
     # Python scope forward declaration
     cdef PyObject *n
     cdef bint is_processed
-    cdef OpInput inputs
+    cdef TensorTriad inputs
     cdef Tensor ten
 
     # Sorted nodes list.
@@ -221,7 +226,7 @@ cdef (PyObject **, int) _topological_sort_and_init(Tensor node):
                     sorted_nodes_size *= 2
                     sorted_nodes = <PyObject **> realloc(
                         sorted_nodes,
-                        sorted_nodes_size
+                        sorted_nodes_size * sizeof(PyObject *)
                     )
                     if sorted_nodes == NULL:
                         raise RuntimeError(
@@ -246,5 +251,12 @@ cdef (PyObject **, int) _topological_sort_and_init(Tensor node):
                 if (ten._requires_grad and Py_TYPE(ten._grad) is
                 not <PyTypeObject *> list):
                     top = _PUSH(stack, top, (inputs.y, False))
+
+            # Check for third extra input
+            if inputs.Z != NULL:
+                ten = <Tensor> inputs.Z
+                if (ten._requires_grad and Py_TYPE(ten._grad) is
+                not <PyTypeObject *> list):
+                    top = _PUSH(stack, top, (inputs.Z, False))
 
     return (sorted_nodes, sorted_nodes_idx)

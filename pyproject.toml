@@ -10,7 +10,7 @@ maintainers = [
 description = "A minimalistic PyTorch-like deep learning framework with strong GPU acceleration"
 requires-python = ">=3.13"
 dependencies = ["numpy>=2.3"]
-license = { text = "BSD-3-Clause" }
+# license = { text = "BSD-3-Clause" }
 
 [project.optional-dependencies]
 gpu = ["cupy"]

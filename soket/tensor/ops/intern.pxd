@@ -88,6 +88,11 @@ cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _LOG
 cdef object _log(int dev)
 
 
+## EXP
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _EXP
+cdef object _exp(int dev)
+
+
 ## MATMUL
 cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _MATMUL
 cdef object _matmul(int dev)
@@ -131,3 +136,18 @@ cdef object _less_equal(int dev)
 ## TRANSPOSE
 cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _TRANSPOSE
 cdef object _transpose(int dev)
+
+
+## MAXIMUM
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _MAXIMUM
+cdef object _maximum(int dev)
+
+
+## SQUEEZE
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _SQUEEZE
+cdef object _squeeze(int dev)
+
+
+## STACK
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _STACK
+cdef object _stack(int dev)

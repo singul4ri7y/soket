@@ -2,5 +2,6 @@ __pycache__
 _test/
 .vscode/
 *.so
+*.o
 *.html
 *.c

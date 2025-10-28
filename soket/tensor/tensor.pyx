@@ -4,7 +4,8 @@ from cpython.tuple cimport PyTuple_GET_SIZE, PyTuple_GET_ITEM
 from cpython.long cimport PyLong_FromLong
 from cpython.slice cimport PySlice_GetIndicesEx
 from cython cimport freelist
-from soket.backend cimport _default_device, _is_gpu_available, DeviceType
+from soket.backend cimport (_default_device, _is_gpu_available,
+    Device, DeviceType)
 from soket.dtype cimport (_default_datatype, _get_scalar_dtype, promote_types,
     int32, _bool)
 from soket.tensor.ops cimport *
@@ -13,8 +14,7 @@ from soket.tensor.ops.intern cimport (_copy, _equal, _not_equal, _greater,
 from soket.tensor.creation cimport _ones_like
 from soket.autodiff cimport _compute_gradient
 from libc.string cimport memcpy, memcmp
-from libc.stdlib cimport calloc, free, qsort
-from math import prod
+from libc.stdlib cimport calloc, free
 cimport numpy as np
 cimport cupy as cp
 import numpy as np
@@ -334,85 +334,6 @@ cdef inline _ShapeInfo _get_matmul_broadcasted_shape(
 
     return info
 
-cdef inline tuple _get_proper_reduction_axes(tuple axes):
-    ''' Get dominating reduction axes. '''
-
-    cdef int len = PyTuple_GET_SIZE(axes)
-    cdef object first = None
-    if len > 0:
-        first = <object> PyTuple_GET_ITEM(axes, 0)
-
-    if (Py_TYPE(first) is <PyTypeObject *> tuple or
-    Py_TYPE(first) is <PyTypeObject *> list):
-        axes = tuple(first)
-        len = PyTuple_GET_SIZE(axes)
-
-    for i in range(len):
-        if (Py_TYPE(<object> PyTuple_GET_ITEM(axes, i)) is not
-        <PyTypeObject *> int):
-            raise RuntimeError('Expected the axes to contain only integers!')
-
-    return axes
-
-
-cdef int _ascending_sort(const void *a, const void *b) noexcept nogil:
-    return (<int *> a)[0] - (<int *> b)[0]
-
-cdef inline (int *, int) _validate_and_create_reduction_axes(
-    tuple axes,
-    int *shape,
-    int nshape,
-    bint keepdims
-):
-    ''' Validates a list of reduction axes. '''
-
-    cdef int axes_len = <int> PyTuple_GET_SIZE(axes)
-
-    # Reduce over all axes
-    if axes_len == 0:
-        return <int *> malloc(0), 0
-
-    cdef int *_axes = <int *> malloc(axes_len * sizeof(int))
-    cdef int new_nshape = nshape if keepdims else nshape - axes_len
-    cdef int *new_shape = <int *> malloc(new_nshape * sizeof(int))
-    if new_shape == NULL:
-        free(_axes)
-        raise MemoryError('Failed to allocate memory to store axes!')
-
-    cdef object elem
-    cdef int axis
-
-    for i in range(axes_len):
-        elem = <object> PyTuple_GET_ITEM(axes, i)
-        axis = <int> elem
-
-        if axis < -nshape or axis >= nshape:
-            free(_axes)
-            free(new_shape)
-            raise ValueError(f'Reduction axis out of bounds: {elem}')
-
-        _axes[i] = axis + nshape if axis < 0 else axis
-
-    # Sort axes
-    qsort(_axes, axes_len, sizeof(int), _ascending_sort)
-
-    cdef int axes_idx = 0
-    cdef int new_idx = 0
-    for i in range(nshape):
-        if i == _axes[axes_idx]:
-            axes_idx += 1
-
-            if keepdims:
-                new_shape[new_idx] = 1
-                new_idx += 1
-            else: continue
-        else:
-            new_shape[new_idx] = shape[i]
-            new_idx += 1
-
-    free(_axes)
-    return new_shape, new_nshape
-
 cdef int _get_slice_length(slice slice, Py_ssize_t dim) except -1:
     ''' Get slice length along a given dimension. '''
 
@@ -531,7 +452,7 @@ cdef class Tensor:
 
         self._tensor_init(
             Op(NULL, NULL, OpType.INVALID),
-            OpInput(NULL, NULL),
+            TensorTriad(NULL, NULL, NULL),
             data,
             device,
             dtype,
@@ -540,7 +461,7 @@ cdef class Tensor:
             requires_grad
         )
 
-    def __del__(self):
+    def __dealloc__(self):
         ''' Tensor destructor. '''
 
         # Release shape memory
@@ -549,12 +470,14 @@ cdef class Tensor:
         # Input tensors are no longer needed.
         Py_XDECREF(self._inputs.x)
         Py_XDECREF(self._inputs.y)
+        Py_XDECREF(self._inputs.Z)
 
         # Value cache no longer needed.
-        Py_XDECREF(self._value_cache[0])
-        Py_XDECREF(self._value_cache[1])
-        Py_XDECREF(self._value_cache[2])
-        Py_XDECREF(self._value_cache[3])
+        if self._value_cache != NULL:
+            for i in range(self._n_value_cache):
+                Py_XDECREF(self._value_cache[i])
+
+            free(self._value_cache)
 
     ## DUNDER METHODS ##
 
@@ -627,6 +550,33 @@ cdef class Tensor:
 
         return self._transpose()
 
+    @property
+    def data(self) -> Tensor:
+        ''' Get a detached tensor. '''
+
+        return self._detach()
+
+    @data.setter
+    def data(self, Tensor data) -> None:
+        ''' Set current tensor object data.'''
+
+        self._set_data(data)
+
+    @property
+    def requires_grad(self) -> bool:
+        ''' Returns true current tensor requires gradient to be computed. '''
+
+        return self._requires_grad
+
+    @requires_grad.setter
+    def requires_grad(self, bint mode) -> None:
+        ''' Set requires_grad field but only for leaf/detached tensors. '''
+
+        if self._op.type != OpType.INVALID:
+            raise RuntimeError('Only detached/leaf tensors can requires_grad!')
+
+        self._requires_grad = mode
+
     ## PROPERTIES END ##
 
     ## METHODS ##
@@ -652,8 +602,8 @@ cdef class Tensor:
         cdef Tensor res = Tensor.__new__(Tensor)
         res._tensor_init(
             self._op,
-            OpInput(NULL, NULL),
-            _copy(self._device._dev_idx)(self._data),
+            TensorTriad(NULL, NULL, NULL),
+            _copy(self._device._dev_idx)(self._data_),
             self._device,
             self._dtype,
             self._shape, self._nshape,
@@ -732,16 +682,6 @@ cdef class Tensor:
         dtype = self._dtype if dtype is None else dtype
         return self._min(_get_proper_reduction_axes(shape), dtype, keepdims)
 
-    def argmax(self, axis: int = None, keepdims: bool = False) -> Tensor:
-        ''' Returns indicies tensor denoting maximum values over an axis. '''
-
-        return self._argmax(axis, keepdims)
-
-    def argmin(self, axis: int = None, keepdims: bool = False) -> Tensor:
-        ''' Returns indicies tensor denoting minimum values over an axis. '''
-
-        return self._argmin(axis, keepdims)
-
     def reshape(self, *shape) -> Tensor:
         ''' Reshape/view current tensor with given shape. '''
 
@@ -757,6 +697,37 @@ cdef class Tensor:
 
         return self._transpose()
 
+    def argmax(self, axis: int = None, keepdims: bool = False) -> Tensor:
+        ''' Returns indicies tensor denoting maximum values over an axis. '''
+
+        return self._argmax(axis, keepdims)
+
+    def argmin(self, axis: int = None, keepdims: bool = False) -> Tensor:
+        ''' Returns indicies tensor denoting minimum values over an axis. '''
+
+        return self._argmin(axis, keepdims)
+
+    def detach(self) -> Tensor:
+        ''' Get a detached tensor. '''
+
+        return self._detach()
+
+    def item(self) -> any:
+        ''' Get scalar tensor element. '''
+
+        if self._nshape != 0:
+            raise ValueError('Can only call Tensor.item() on scalar tensors')
+
+        return self._compute_data().item()
+
+    def retain_grad(self) -> None:
+        '''
+        Forces a non-leaf tensor to store computed gradient in the .grad
+        field.
+        '''
+
+        self._retain_grad = True
+
     ## METHODS END ##
 
     ## CDEF METHODS ##
@@ -764,7 +735,7 @@ cdef class Tensor:
     cdef void _tensor_init(
         self,
         Op op,
-        OpInput inputs,
+        TensorTriad inputs,
         object data,
         Device device,
         DType dtype,
@@ -784,6 +755,9 @@ cdef class Tensor:
             if not req_grad and inputs.y is not NULL:
                 req_grad |= (<Tensor> inputs.y)._requires_grad
 
+            if not req_grad and inputs.Z is not NULL:
+                req_grad |= (<Tensor> inputs.Z)._requires_grad
+
         # Allocate and parse shape
         if copy_shape is True:
             self._shape = <int *> malloc(nshape * sizeof(int))
@@ -796,10 +770,16 @@ cdef class Tensor:
             self._shape = shape
             self._nshape = nshape
 
+        # Increase input reference count, will be decreased when tensor gets
+        # freed.
+        Py_XINCREF(inputs.x)
+        Py_XINCREF(inputs.y)
+        Py_XINCREF(inputs.Z)
+
         # Init tensor
         self._op = op
         self._inputs = inputs
-        self._data = data
+        self._data_ = data
         self._device = device
         self._dtype = dtype
         self._requires_grad = req_grad
@@ -810,8 +790,8 @@ cdef class Tensor:
     cdef object _compute_data(self):
         ''' Resolve computational graph computing current tensor data. '''
 
-        if self._data is None:
-            self._data = self._op.fwd(
+        if self._data_ is None:
+            self._data_ = self._op.fwd(
                 self,
 
                 # Input x
@@ -820,10 +800,14 @@ cdef class Tensor:
 
                 # Input y
                 (<Tensor> self._inputs.y)._compute_data()
-                    if self._inputs.y != NULL else None
+                    if self._inputs.y != NULL else None,
+
+                # Extra input Z
+                (<Tensor> self._inputs.Z)._compute_data()
+                    if self._inputs.Z != NULL else None
             )
 
-        return self._data
+        return self._data_
 
     cdef Tensor _argmax(self, axis, keepdims):
         '''
@@ -963,6 +947,39 @@ cdef class Tensor:
 
         self._compute_data().__setitem__(idx, value)
 
+    cdef Tensor _detach(self):
+        ''' Get detached tensor (C ONLY). '''
+
+        return Tensor._make_const(
+            self._compute_data(),
+            self._device,
+            self._dtype,
+            self._shape, self._nshape,
+            True,
+            False
+        )
+
+    cdef Tensor _data(self):
+        ''' Alias to Tensor._detach(). '''
+
+        return self._detach()
+
+    cdef void _set_data(self, Tensor data):
+        ''' Set tensor object data. '''
+
+        # If `data` is of different shape, change shape
+        if (self._nshape != data._nshape or
+        memcmp(self._shape, data._shape, self._nshape * sizeof(int))):
+            free(self._shape)
+            self._shape = <int *> malloc(data._nshape * sizeof(int))
+            memcpy(self._shape, data._shape, data._nshape * sizeof(int))
+
+            self._nshape = data._nshape
+
+        self._data_ = data._compute_data()
+        self._device = data._device
+        self._dtype = data._dtype
+
     ## CDEF METHODS END ##
 
     ## CDEF STATIC METHODS ##
@@ -984,16 +1001,9 @@ cdef class Tensor:
 
         # Create Tensor object w/o calling constructor
         cdef Tensor res = Tensor.__new__(Tensor)
-
-        if Py_TYPE(data) is <PyTypeObject *> Tensor:
-            data = (<Tensor> data)._compute_data()
-            dtype = (<Tensor> data)._dtype
-            shape = (<Tensor> data)._shape
-            nshape = (<Tensor> data)._nshape
-
         res._tensor_init(
             Op(NULL, NULL, OpType.INVALID),
-            OpInput(NULL, NULL),
+            TensorTriad(NULL, NULL, NULL),
             data,
             device,
             dtype,
@@ -1007,7 +1017,7 @@ cdef class Tensor:
     @staticmethod
     cdef Tensor _make_from_op(
         Op op,
-        OpInput inputs,
+        TensorTriad inputs,
         Device device,
         DType dtype,
         int *shape, int nshape,
@@ -1030,8 +1040,17 @@ cdef class Tensor:
         )
 
         # Update value caches.
-        for i in range(ncache):
-            res._value_cache[i] = cache[i]
+        if ncache > 0:
+            res._value_cache = <PyObject **> malloc(ncache * sizeof(PyObject *))
+            if res._value_cache == NULL:
+                raise MemoryError(
+                    'Failed to allocate memory to store value caches!'
+                )
+
+            res._n_value_cache = ncache if ncache > 0 else 0
+            for i in range(ncache):
+                Py_XINCREF(cache[i])
+                res._value_cache[i] = cache[i]
 
         # Compute the operation if not in lazy state.
         if not _LAZY_STATE:
@@ -1042,30 +1061,53 @@ cdef class Tensor:
             # required, no need to build a computational graph.
             if not res._requires_grad:
                 res._op = Op(NULL, NULL, OpType.INVALID)
-                res._inputs = OpInput(NULL, NULL)
+
+                Py_XDECREF(res._inputs.x)
+                Py_XDECREF(res._inputs.y)
+                Py_XDECREF(res._inputs.Z)
+                res._inputs = TensorTriad(NULL, NULL, NULL)
 
         return res
 
+    @staticmethod
+    cdef Tensor _from_numpy(object array):
+        ''' Construct a tensor from NumPy array (C ONLY). '''
+
+        cdef _ShapeInfo info = _get_shape_info_from_tuple(array.shape)
+        return Tensor._make_const(
+            array,
+            Device(DeviceType.CPU, -1),
+            DType(array.dtype.__str__()),
+            info.shape, info.nshape,
+            False,
+            False
+        )
+
+
     ## CDEF STATIC METHODS END ##
+
+    ## STATIC METHODS ##
+
+    @staticmethod
+    def from_numpy(object array) -> Tensor:
+        ''' Construct a tensor from NumPy array. '''
+
+        return Tensor._from_numpy(array)
+
+    ## STATIC METHODS END ##
 
     ## CDEF OPERATOR METHODS ##
 
     cdef Tensor _add(self, other: Tensor | any):
         ''' Performs addition with a tensor or a scalar (C ONLY). '''
 
-        # Python scope forward declaration
-        cdef OpInput inputs
+        # Python scope forward declarations
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(<PyObject *> self, NULL)
-
-        # The `other` object will either be passed as a value cache or as
-        # an input.
-        Py_XINCREF(<PyObject *> other)
+        cdef TensorTriad inputs = TensorTriad(<PyObject *> self, NULL, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1132,11 +1174,9 @@ cdef class Tensor:
     cdef Tensor _neg(self):
         ''' Negates a tensor (C ONLY). '''
 
-        Py_XINCREF(<PyObject *> self)
-        cdef OpInput inputs = OpInput(<PyObject *> self, NULL)
         return Tensor._make_from_op(
             _op_negate,
-            inputs,
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             self._shape, self._nshape,
@@ -1148,18 +1188,12 @@ cdef class Tensor:
         ''' Subtracts another tensor or a scalar from self tensor (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(<PyObject *> self, NULL)
-
-        # The `other` object will either be passed as a value cache or as
-        # an input.
-        Py_XINCREF(<PyObject *> other)
+        cdef TensorTriad inputs = TensorTriad(<PyObject *> self, NULL, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1230,14 +1264,12 @@ cdef class Tensor:
         ''' Subtracts self tensor from a scalar (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(NULL, <PyObject *> self)
+        cdef TensorTriad inputs = TensorTriad(NULL, <PyObject *> self, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1262,7 +1294,6 @@ cdef class Tensor:
             dtype = promote_types(self._dtype, dtype)
 
         # Value cache
-        Py_XINCREF(<PyObject *> other)
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> 0x00,  # Commute
             <PyObject *> other
@@ -1282,18 +1313,12 @@ cdef class Tensor:
         ''' Performs multiplication with a tensor or a scalar (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(<PyObject *> self, NULL)
-
-        # The `other` object will either be passed as a value cache or as
-        # an input.
-        Py_XINCREF(<PyObject *> other)
+        cdef TensorTriad inputs = TensorTriad(<PyObject *> self, NULL, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1361,18 +1386,12 @@ cdef class Tensor:
         ''' Divides self tensor by a scalar or another tensor (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(<PyObject *> self, NULL)
-
-        # The `other` object will either be passed as a value cache or as
-        # an input.
-        Py_XINCREF(<PyObject *> other)
+        cdef TensorTriad inputs = TensorTriad(<PyObject *> self, NULL, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1443,14 +1462,9 @@ cdef class Tensor:
         ''' Divides a scalar over self tensor (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
-
-        # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(NULL, <PyObject *> self)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1475,7 +1489,6 @@ cdef class Tensor:
             dtype = promote_types(self._dtype, dtype)
 
         # Value cache
-        Py_XINCREF(<PyObject *> other)
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> 0x00,  # Commute
             <PyObject *> other
@@ -1483,7 +1496,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_scalar_div,
-            inputs,
+            TensorTriad(NULL, <PyObject *> self, NULL),
             self._device,
             dtype,
             self._shape, self._nshape,
@@ -1495,18 +1508,12 @@ cdef class Tensor:
         ''' Raise a tensor to a power (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
 
         # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(<PyObject *> self, NULL)
-
-        # The `other` object will either be passed as a value cache or as
-        # an input.
-        Py_XINCREF(<PyObject *> other)
+        cdef TensorTriad inputs = TensorTriad(<PyObject *> self, NULL, NULL)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1577,14 +1584,9 @@ cdef class Tensor:
         ''' Raise a scalar to a power (C ONLY). '''
 
         # Python scope forward declaration
-        cdef OpInput inputs
         cdef Tensor ten
         cdef DType dtype
         cdef _ShapeInfo info
-
-        # Initialize first input
-        Py_XINCREF(<PyObject *> self)
-        inputs = OpInput(NULL, <PyObject *> self)
 
         # With another tensor
         if Py_TYPE(other) is <PyTypeObject *> Tensor:
@@ -1609,7 +1611,6 @@ cdef class Tensor:
             dtype = promote_types(self._dtype, dtype)
 
         # Value cache
-        Py_XINCREF(<PyObject *> other)
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> 0x00,  # Commute
             <PyObject *> other
@@ -1617,7 +1618,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_scalar_pow,
-            inputs,
+            TensorTriad(NULL, <PyObject *> self, NULL),
             self._device,
             dtype,
             self._shape, self._nshape,
@@ -1664,13 +1665,11 @@ cdef class Tensor:
                 free(in_shape)
                 raise RuntimeError('Incompatible broadcast shapes!')
 
-        Py_XINCREF(<PyObject *> shape)
         cdef (PyObject *)[1] value_cache = [ <PyObject *> shape ]
 
-        Py_XINCREF(<PyObject *> self)
         return Tensor._make_from_op(
             _op_broadcast_to,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             in_shape, nshape,
@@ -1693,10 +1692,6 @@ cdef class Tensor:
         if nshape == 0:
             axes = None
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> axes)
-        Py_XINCREF(<PyObject *> keepdims)
-
         # Value cache
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> axes,
@@ -1705,7 +1700,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_sum,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             dtype,
             shape, nshape,
@@ -1745,11 +1740,6 @@ cdef class Tensor:
         if nshape == 0:
             axes = None
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> axes)
-        Py_XINCREF(<PyObject *> keepdims)
-        Py_XINCREF(<PyObject *> py_observations)
-
         # Value cache
         cdef (PyObject *)[3] value_cache = [
             <PyObject *> axes,
@@ -1759,7 +1749,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_mean,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             dtype,
             shape, nshape,
@@ -1783,10 +1773,6 @@ cdef class Tensor:
         if nshape == 0:
             axes = None
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> axes)
-        Py_XINCREF(<PyObject *> keepdims)
-
         # Value cache
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> axes,
@@ -1795,7 +1781,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_max,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             dtype,
             shape, nshape,
@@ -1819,10 +1805,6 @@ cdef class Tensor:
         if nshape == 0:
             axes = None
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> axes)
-        Py_XINCREF(<PyObject *> keepdims)
-
         # Value cache
         cdef (PyObject *)[2] value_cache = [
             <PyObject *> axes,
@@ -1831,7 +1813,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_min,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             dtype,
             shape, nshape,
@@ -1868,13 +1850,9 @@ cdef class Tensor:
             other._nshape
         )
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> other)
-        cdef OpInput inputs = OpInput(<PyObject *> self, <PyObject *> other)
-
         return Tensor._make_from_op(
             _op_matmul,
-            inputs,
+            TensorTriad(<PyObject *> self, <PyObject *> other, NULL),
             self._device,
             dtype,
             info.shape, info.nshape,
@@ -1905,15 +1883,12 @@ cdef class Tensor:
             free(new_shape)
             raise ValueError(f'Cannot reshape {self_size} elements to {shape}!')
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> shape)
-
         # Caching
         cdef (PyObject *)[1] value_cache = [ <PyObject *> shape ]
 
         return Tensor._make_from_op(
             _op_reshape,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             new_shape, new_nshape,
@@ -1959,9 +1934,6 @@ cdef class Tensor:
 
         free(mask)
 
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> axes)
-
         # Value cache
         cdef (PyObject *)[1] value_cache = [
             <PyObject *> axes
@@ -1969,7 +1941,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_permute,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             shape, nshape,
@@ -1994,11 +1966,9 @@ cdef class Tensor:
         for i in range(nshape - 1, -1, -1):
             shape[i] = self._shape[nshape - i - 1]
 
-        Py_XINCREF(<PyObject *> self)
-
         return Tensor._make_from_op(
             _op_transpose,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             shape, nshape,
@@ -2050,14 +2020,13 @@ cdef class Tensor:
                     )
                     nshape += 1
 
+            i += 1  # i + 1: Python for loops are unlike C
+
         # Copy remaining shape
-        while i + 1 < self._nshape:  # i + 1: Python for loops are unlike C
+        while i < self._nshape:
             shape[nshape] = self._shape[i]
             nshape += 1
             i += 1
-
-        Py_XINCREF(<PyObject *> self)
-        Py_XINCREF(<PyObject *> idx)
 
         # Value cache
         cdef (PyObject *)[1] value_cache = [
@@ -2066,7 +2035,7 @@ cdef class Tensor:
 
         return Tensor._make_from_op(
             _op_select,
-            OpInput(<PyObject *> self, NULL),
+            TensorTriad(<PyObject *> self, NULL, NULL),
             self._device,
             self._dtype,
             shape, nshape,

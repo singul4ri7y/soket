@@ -26,6 +26,7 @@ _ARGMIN[_cpu] = <PyObject *> np.argmin
 _RESHAPE[_cpu] = <PyObject *> np.reshape
 _BCASTTO[_cpu] = <PyObject *> np.broadcast_to
 _LOG[_cpu] = <PyObject *> np.log
+_EXP[_cpu] = <PyObject *> np.exp
 _MATMUL[_cpu] = <PyObject *> np.matmul
 _COPY[_cpu] = <PyObject *> np.copy
 _EQUAL[_cpu] = <PyObject *> np.equal
@@ -35,6 +36,9 @@ _GREATER_EQUAL[_cpu] = <PyObject *> np.greater_equal
 _LESS[_cpu] = <PyObject *> np.less
 _LESS_EQUAL[_cpu] = <PyObject *> np.less_equal
 _TRANSPOSE[_cpu] = <PyObject *> np.transpose
+_MAXIMUM[_cpu] = <PyObject *> np.maximum
+_SQUEEZE[_cpu] = <PyObject *> np.squeeze
+_STACK[_cpu] = <PyObject *> np.stack
 
 
 # Intern GPU functions if available.
@@ -57,6 +61,7 @@ if _is_gpu_available():
     _RESHAPE[_gpu] = <PyObject *> cp.reshape
     _BCASTTO[_gpu] = <PyObject *> cp.broadcast_to
     _LOG[_gpu] = <PyObject *> cp.log
+    _EXP[_gpu] = <PyObject *> cp.exp
     _MATMUL[_gpu] = <PyObject *> cp.matmul
     _COPY[_gpu] = <PyObject *> cp.copy
     _EQUAL[_gpu] = <PyObject *> cp.equal
@@ -66,6 +71,9 @@ if _is_gpu_available():
     _LESS[_gpu] = <PyObject *> cp.less
     _LESS_EQUAL[_gpu] = <PyObject *> cp.less_equal
     _TRANSPOSE[_gpu] = <PyObject *> cp.transpose
+    _MAXIMUM[_gpu] = <PyObject *> cp.maximum
+    _SQUEEZE[_gpu] = <PyObject *> cp.squeeze
+    _STACK[_gpu] = <PyObject *> cp.stack
 
 
 ## INTERN HELPER FUNCTIONS ##
@@ -118,6 +126,9 @@ cdef object _broadcast_to(int dev):
 cdef object _log(int dev):
     return <object> _LOG[dev]
 
+cdef object _exp(int dev):
+    return <object> _EXP[dev]
+
 cdef object _matmul(int dev):
     return <object> _MATMUL[dev]
 
@@ -144,5 +155,14 @@ cdef object _less_equal(int dev):
 
 cdef object _transpose(int dev):
     return <object> _TRANSPOSE[dev]
+
+cdef object _maximum(int dev):
+    return <object> _MAXIMUM[dev]
+
+cdef object _squeeze(int dev):
+    return <object> _SQUEEZE[dev]
+
+cdef object _stack(int dev):
+    return <object> _STACK[dev]
 
 ## INTERN HELPER FUNCTIONS END ##

@@ -2,26 +2,16 @@ from cpython.object cimport PyObject, Py_TYPE, PyTypeObject
 from cpython.tuple cimport PyTuple_GET_SIZE, PyTuple_GET_ITEM
 from soket.backend cimport Device
 from soket.dtype cimport DType
-from libc.stdlib cimport malloc
+from libc.stdlib cimport malloc, free, qsort
 
 
-## DEFINES ##
-
-DEF _MAX_CACHE = 4
-
-## DEFINES END ##
-
-
-cdef struct OpInput:
-    ## Represents tensor operation inputs
-
+cdef struct TensorTriad:
+    # Generally, main focus should be these two tensors:
     PyObject *x
     PyObject *y
 
-# Output of backward pass
-cdef struct BackwardOutput:
-    PyObject *x
-    PyObject *y
+    # Extra third tensor
+    PyObject *Z
 
 cdef struct _ShapeInfo:
     # Contains shape information.
@@ -44,10 +34,13 @@ ctypedef object (*forward_fn)(
     object x,
 
     # Target input y
-    object y
+    object y,
+
+    # Target (extra) input Z
+    object Z
 )
 
-ctypedef BackwardOutput (*backward_fn)(
+ctypedef TensorTriad (*backward_fn)(
     # Node/tensor object being differentiated w.r.t. its inputs. In other
     # words, partial adjoints are being computed for provided node inputs.
     Tensor node,
@@ -59,7 +52,10 @@ ctypedef BackwardOutput (*backward_fn)(
     Tensor x,
 
     # Node input y
-    Tensor y
+    Tensor y,
+
+    # Node (extra) input Z
+    Tensor Z
 )
 
 ## TYPEDEFS END ##
@@ -88,7 +84,19 @@ cdef enum OpType:
     RESHAPE,
     PERMUTE,
     TRANSPOSE,
-    SELECT
+    SELECT,
+    LOG,
+    EXP,
+    LOGSUMEXP,
+
+    # Loss operations
+    SXENTROPYLOSS,
+
+    # Normalization operations
+    BATCHNORM,
+
+    # Acvitation operations
+    RELU,
 
     # Invalid operation, used to denote leaf tensor
     INVALID = -1
@@ -148,6 +156,85 @@ cdef inline tuple _get_proper_shape(tuple shape):
 
     return shape
 
+cdef inline tuple _get_proper_reduction_axes(tuple axes):
+    ''' Get dominating reduction axes. '''
+
+    cdef int len = PyTuple_GET_SIZE(axes)
+    cdef object first = None
+    if len > 0:
+        first = <object> PyTuple_GET_ITEM(axes, 0)
+
+    if (Py_TYPE(first) is <PyTypeObject *> tuple or
+    Py_TYPE(first) is <PyTypeObject *> list):
+        axes = tuple(first)
+        len = PyTuple_GET_SIZE(axes)
+
+    for i in range(len):
+        if (Py_TYPE(<object> PyTuple_GET_ITEM(axes, i)) is not
+        <PyTypeObject *> int):
+            raise RuntimeError('Expected the axes to contain only integers!')
+
+    return axes
+
+
+cdef inline int _ascending_sort(const void *a, const void *b) noexcept nogil:
+    return (<int *> a)[0] - (<int *> b)[0]
+
+cdef inline (int *, int) _validate_and_create_reduction_axes(
+    tuple axes,
+    int *shape,
+    int nshape,
+    bint keepdims
+):
+    ''' Validates a list of reduction axes. '''
+
+    cdef int axes_len = <int> PyTuple_GET_SIZE(axes)
+
+    # Reduce over all axes
+    if axes_len == 0:
+        return <int *> malloc(0), 0
+
+    cdef int *_axes = <int *> malloc(axes_len * sizeof(int))
+    cdef int new_nshape = nshape if keepdims else nshape - axes_len
+    cdef int *new_shape = <int *> malloc(new_nshape * sizeof(int))
+    if new_shape == NULL:
+        free(_axes)
+        raise MemoryError('Failed to allocate memory to store axes!')
+
+    cdef object elem
+    cdef int axis
+
+    for i in range(axes_len):
+        elem = <object> PyTuple_GET_ITEM(axes, i)
+        axis = <int> elem
+
+        if axis < -nshape or axis >= nshape:
+            free(_axes)
+            free(new_shape)
+            raise ValueError(f'Reduction axis out of bounds: {elem}')
+
+        _axes[i] = axis + nshape if axis < 0 else axis
+
+    # Sort axes
+    qsort(_axes, axes_len, sizeof(int), _ascending_sort)
+
+    cdef int axes_idx = 0
+    cdef int new_idx = 0
+    for i in range(nshape):
+        if axes_idx < axes_len and i == _axes[axes_idx]:
+            axes_idx += 1
+
+            if keepdims:
+                new_shape[new_idx] = 1
+                new_idx += 1
+            else: continue
+        else:
+            new_shape[new_idx] = shape[i]
+            new_idx += 1
+
+    free(_axes)
+    return new_shape, new_nshape
+
 ## HELPER FUNCTIONS END ##
 
 
@@ -155,7 +242,7 @@ cdef class Tensor:
     ''' Represents a soket Tensor. '''
 
     # Object to cache the data
-    cdef object _data
+    cdef object _data_
 
     # Compute device tensor belongs to
     cdef Device _device
@@ -164,7 +251,7 @@ cdef class Tensor:
     cdef DType _dtype
 
     # Inputs to this node/tensor in computational graph.
-    cdef OpInput _inputs
+    cdef TensorTriad _inputs
 
     # Ensured to store the gradient/adjoint. May used to hold list of partial
     # adjoints during gradient computation.
@@ -186,7 +273,8 @@ cdef class Tensor:
     cdef bint _retain_grad
 
     # For caching values, useful for both forward and backward pass
-    cdef (PyObject *)[_MAX_CACHE] _value_cache
+    cdef int _n_value_cache
+    cdef PyObject **_value_cache
 
     ## METHODS ##
 
@@ -201,7 +289,7 @@ cdef class Tensor:
     cdef void _tensor_init(
         self,
         Op op,
-        OpInput inputs,
+        TensorTriad inputs,
         object data,
         Device device,
         DType dtype,
@@ -229,13 +317,16 @@ cdef class Tensor:
     @staticmethod
     cdef Tensor _make_from_op(
         Op op,
-        OpInput inputs,
+        TensorTriad inputs,
         Device device,
         DType dtype,
         int *shape, int nshape,
         bint copy_shape,
         PyObject **cache, int ncache
     )
+
+    @staticmethod
+    cdef Tensor _from_numpy(object array)
 
     ## CDEF STATIC METHODS ##
 
@@ -256,17 +347,20 @@ cdef class Tensor:
     cdef Tensor _max(self, tuple axes, DType dtype, keepdims)
     cdef Tensor _min(self, tuple axes, DType dtype, keepdims)
     cdef Tensor _matmul(self, Tensor other)
-    cdef Tensor _argmax(self, axis, keepdims)
-    cdef Tensor _argmin(self, axis, keepdims)
     cdef Tensor _reshape(self, tuple shape)
     cdef Tensor _permute(self, tuple axes)
     cdef Tensor _transpose(self)
     cdef Tensor _getitem(self, idx: int | slice | tuple[int | slice])
+    cdef Tensor _argmax(self, axis, keepdims)
+    cdef Tensor _argmin(self, axis, keepdims)
     cdef void _setitem(
         self,
         idx: int | slice | tuple[int | slice],
         value: Tensor | any
     )
+    cdef Tensor _detach(self)
+    cdef Tensor _data(self)
+    cdef void _set_data(self, Tensor data)
 
     ## CDEF OPERATOR METHODS END ##
 

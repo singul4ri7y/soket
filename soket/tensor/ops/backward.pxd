@@ -1,147 +1,189 @@
-from soket.tensor cimport Tensor, BackwardOutput
+from soket.tensor cimport Tensor, TensorTriad
 
 
-cdef BackwardOutput _elemwise_add_bwd(
+cdef TensorTriad _elemwise_add_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
-cdef BackwardOutput _scalar_add_bwd(
+cdef TensorTriad _scalar_add_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
-)
-
-
-cdef BackwardOutput _negate_bwd(
-    Tensor node,
-    Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _elemwise_sub_bwd(
+cdef TensorTriad _negate_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _scalar_sub_bwd(
+cdef TensorTriad _elemwise_sub_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _elemwise_mul_bwd(
+cdef TensorTriad _scalar_sub_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _scalar_mul_bwd(
+cdef TensorTriad _elemwise_mul_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _elemwise_div_bwd(
+cdef TensorTriad _scalar_mul_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _scalar_div_bwd(
+cdef TensorTriad _elemwise_div_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _elemwise_pow_bwd(
+cdef TensorTriad _scalar_div_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _scalar_pow_bwd(
+cdef TensorTriad _elemwise_pow_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _broadcast_to_bwd(
+cdef TensorTriad _scalar_pow_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _sum_bwd(
+cdef TensorTriad _broadcast_to_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _mean_bwd(
+cdef TensorTriad _sum_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _max_bwd(
+cdef TensorTriad _mean_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _min_bwd(
+cdef TensorTriad _max_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _matmul_bwd(
+cdef TensorTriad _min_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _reshape_bwd(
+cdef TensorTriad _matmul_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _permute_bwd(
+cdef TensorTriad _reshape_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _transpose_bwd(
+cdef TensorTriad _permute_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
 )
 
 
-cdef BackwardOutput _select_bwd(
+cdef TensorTriad _transpose_bwd(
     Tensor node,
     Tensor adj,
-    Tensor x, Tensor y
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _select_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _relu_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _log_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _exp_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _logsumexp_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _sxentropyloss_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _bnorm_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
 )

@@ -213,7 +213,7 @@ cdef class Device:
         Returns samples from a normal distribution of provided mean and variance.
         '''
 
-        return self._rand_fn(mean, std, shape).astype(dtype)
+        return self._randn_fn(mean, std, shape).astype(dtype)
 
     cdef object _randb(self, tuple shape, object p, str dtype):
         '''
