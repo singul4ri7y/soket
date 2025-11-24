@@ -4,8 +4,9 @@ from cpython.object cimport Py_TYPE, PyTypeObject
 from soket.tensor cimport (Op, OpType, TensorTriad, _ShapeInfo,
     _get_shape_info_from_tuple, _get_proper_shape)
 from soket.backend cimport _default_device
-from soket.dtype cimport _default_datatype
-from soket.tensor.ops.intern cimport _max
+from soket.dtype cimport _default_datatype, int32
+from soket.tensor.ops.intern cimport *
+from libc.stdlib cimport malloc
 
 
 ## HELPER FUNCTIONS ##
@@ -18,12 +19,14 @@ cdef inline Tensor _create_and_return_tensor(
     requires_grad
 ):
     # Deduce shape from tuple
-    cdef _ShapeInfo info = _get_shape_info_from_tuple(shape)
+    cdef _ShapeInfo info
+    if shape == None:  # scalar tensor
+        info.shape = <int *> malloc(0)
+        info.nshape = 0
+    else:
+        info = _get_shape_info_from_tuple(shape)
 
-    cdef Tensor res = Tensor.__new__(Tensor)
-    res._tensor_init(
-        Op(NULL, NULL, OpType.INVALID),
-        TensorTriad(NULL, NULL, NULL),
+    return Tensor._make_const(
         data,
         device,
         dtype,
@@ -32,9 +35,121 @@ cdef inline Tensor _create_and_return_tensor(
         requires_grad
     )
 
-    return res
-
 ## HELPER FUNCTIONS END ##
+
+
+## CDEF METHODS ##
+
+cdef Tensor _randb(tuple shape, p, Device device, DType dtype, requires_grad):
+    '''
+    Returns tensor of given shape filled with samples from a binomial
+    distribution of given probability and single trial per sample.
+
+    (C ONLY)
+    '''
+
+    return _create_and_return_tensor(
+        shape,
+        device._randb(shape, p, dtype._str()),
+        device,
+        dtype,
+        requires_grad
+    )
+
+
+cdef Tensor _zeros(tuple shape, Device device, DType dtype, requires_grad):
+    ''' Returns tensor filled with zeros of given shape (C ONLY). '''
+
+    return _create_and_return_tensor(
+        shape,
+        device._zeros(shape, dtype._str()),
+        device,
+        dtype,
+        requires_grad
+    )
+
+
+cdef Tensor _zeros_like(
+    Tensor ten,
+    Device device,
+    DType dtype,
+    bint requires_grad
+):
+    '''
+    Returns a tensor of the same shape as given tensor but filled with zeros.
+
+    C ONLY.
+    '''
+
+    cdef tuple shape = <tuple> ten.shape
+    return _create_and_return_tensor(
+        shape,
+        device._zeros(shape, dtype._str()),
+        device,
+        dtype,
+        requires_grad
+    )
+
+
+cdef Tensor _ones_like(
+    Tensor ten,
+    Device device,
+    DType dtype,
+    bint requires_grad
+):
+    '''
+    Returns a tensor of the same shape as given tensor but filled with ones.
+
+    C ONLY.
+    '''
+
+    cdef tuple shape = <tuple> ten.shape
+    return _create_and_return_tensor(
+        shape,
+        device._ones(shape, dtype._str()),
+        device,
+        dtype,
+        requires_grad
+    )
+
+
+cdef Tensor _ones(tuple shape, Device device, DType dtype, requires_grad):
+    ''' Returns tensor filled with ones of given shape (C ONLY). '''
+
+    return _create_and_return_tensor(
+        shape,
+        device._ones(shape, dtype._str()),
+        device,
+        dtype,
+        requires_grad
+    )
+
+
+cdef Tensor _one_hot(
+    Tensor tensor,
+    int num_classes,
+    Device device,
+    DType dtype,
+    requires_grad
+):
+    ''' Returns one-hot encoded tensor. '''
+
+    # Refer to `dtype.pyx:_supported_dtypes` for datatype indexing reference.
+    if tensor._dtype._idx < 3 or tensor._dtype._idx > 10:
+        raise TypeError('Tensor indicies must be integer!')
+
+    tensor = tensor.to(device)
+    array = device._one_hot(tensor._compute_data(), num_classes, dtype._str())
+
+    return _create_and_return_tensor(
+        <tuple> array.shape,
+        array,
+        device,
+        dtype,
+        requires_grad
+    )
+
+## CDEF METHODS END ##
 
 
 def rand(
@@ -101,23 +216,6 @@ def randn(
     )
 
 
-cdef Tensor _randb(tuple shape, p, Device device, DType dtype, requires_grad):
-    '''
-    Returns tensor of given shape filled with samples from a binomial
-    distribution of given probability and single trial per sample.
-
-    (C ONLY)
-    '''
-
-    return _create_and_return_tensor(
-        shape,
-        device._randb(shape, p, dtype._str()),
-        device,
-        dtype,
-        requires_grad
-    )
-
-
 def randb(
     *shape,
     object p=0.5,
@@ -148,12 +246,26 @@ def randb(
     )
 
 
-cdef Tensor _zeros(tuple shape, Device device, DType dtype, requires_grad):
-    ''' Returns tensor filled with zeros of given shape (C ONLY). '''
+def randint(
+    object low,
+    object high,
+    tuple size=None,
+    Device device=None,
+    DType dtype=None,
+    requires_grad: bool = None
+) -> Tensor:
+    '''
+    Returns tensor of given shape filled with samples from a binomial
+    distribution of given probability and single trial per sample.
+    '''
+
+    # Use defaults
+    dtype = int32 if dtype is None else dtype
+    device = _default_device() if device is None else device
 
     return _create_and_return_tensor(
-        shape,
-        device._zeros(shape, dtype._str()),
+        size,
+        device._randint(low, high, size, dtype._str()),
         device,
         dtype,
         requires_grad
@@ -183,26 +295,6 @@ def zeros(
     )
 
 
-cdef Tensor _zeros_like(
-    Tensor ten,
-    Device device,
-    DType dtype,
-    bint requires_grad
-):
-    '''
-    Returns a tensor of the same shape as given tensor but filled with zeros.
-
-    C ONLY.
-    '''
-
-    cdef tuple shape = <tuple> ten.shape
-    return _create_and_return_tensor(
-        shape,
-        device._zeros(shape, dtype._str()),
-        device,
-        dtype,
-        requires_grad
-    )
 
 
 def zeros_like(
@@ -229,16 +321,6 @@ def zeros_like(
     )
 
 
-cdef Tensor _ones(tuple shape, Device device, DType dtype, requires_grad):
-    ''' Returns tensor filled with ones of given shape (C ONLY). '''
-
-    return _create_and_return_tensor(
-        shape,
-        device._ones(shape, dtype._str()),
-        device,
-        dtype,
-        requires_grad
-    )
 
 
 def ones(
@@ -264,26 +346,6 @@ def ones(
     )
 
 
-cdef Tensor _ones_like(
-    Tensor ten,
-    Device device,
-    DType dtype,
-    bint requires_grad
-):
-    '''
-    Returns a tensor of the same shape as given tensor but filled with ones.
-
-    C ONLY.
-    '''
-
-    cdef tuple shape = <tuple> ten.shape
-    return _create_and_return_tensor(
-        shape,
-        device._ones(shape, dtype._str()),
-        device,
-        dtype,
-        requires_grad
-    )
 
 
 def one_like(
@@ -362,31 +424,44 @@ def full(
     )
 
 
-cdef Tensor _one_hot(
-    Tensor tensor,
-    int num_classes,
-    Device device,
-    DType dtype,
-    requires_grad
+def linspace(
+    object start, object end,
+    object num=100,
+    object endpoint=True,
+    object axis=0,
+    Device device=None,
+    DType dtype=None,
+    requires_grad=None
 ):
-    ''' Returns one-hot encoded tensor. '''
+    '''
+    Returns a tensor filled with evenly spaced numbers over a specific
+    interval.
+    '''
 
-    # Refer to `dtype.pyx:_supported_dtypes` for datatype indexing reference.
-    if tensor._dtype._idx < 3 or tensor._dtype._idx > 10:
-        raise TypeError('Tensor indicies must be integer!')
+    # Extract data if tensor is provided
+    if Py_TYPE(start) is <PyTypeObject *> Tensor:
+        start = (<Tensor> start)._compute_data()
 
-    tensor = tensor.to(device)
-    array = device._one_hot(tensor._compute_data(), num_classes, dtype._str())
+        if Py_TYPE(end) is not <PyTypeObject *> Tensor:
+            raise ValueError('Both start and end point has to be tensors!')
+        end = (<Tensor> end)._compute_data()
 
+    dtype = _default_datatype if dtype is None else dtype
+    device = _default_device() if device is None else device
+
+    cdef object data = _linspace(device._dev_idx)(
+        start, end, num, endpoint,
+        False, dtype._str(), axis
+    )
     return _create_and_return_tensor(
-        <tuple> array.shape,
-        array,
+        data.shape,
+        data,
         device,
         dtype,
         requires_grad
     )
 
-
+# TODO: Move to soket.nn.functional
 def one_hot(
     Tensor tensor,
     object num_classes = -1,

@@ -20,3 +20,11 @@ cpdef Tensor layer_norm(
     object eps=?
 )
 
+
+cpdef Tensor softmax_cross_entropy(
+    Tensor logits, Tensor targets,
+    str reduction=?
+)
+
+
+cpdef Tensor embedding(Tensor input, Tensor weight)

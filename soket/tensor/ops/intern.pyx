@@ -18,7 +18,10 @@ _MUL[_cpu] = <PyObject *> np.multiply
 _DIV[_cpu] = <PyObject *> np.divide
 _POW[_cpu] = <PyObject *> np.power
 _SUM[_cpu] = <PyObject *> np.sum
+_ABS[_cpu] = <PyObject *> np.abs
 _MEAN[_cpu] = <PyObject *> np.mean
+_STD[_cpu] = <PyObject *> np.std
+_VAR[_cpu] = <PyObject *> np.var
 _MAX[_cpu] = <PyObject *> np.max
 _MIN[_cpu] = <PyObject *> np.min
 _ARGMAX[_cpu] = <PyObject *> np.argmax
@@ -39,7 +42,15 @@ _TRANSPOSE[_cpu] = <PyObject *> np.transpose
 _MAXIMUM[_cpu] = <PyObject *> np.maximum
 _SQUEEZE[_cpu] = <PyObject *> np.squeeze
 _STACK[_cpu] = <PyObject *> np.stack
+_CONCAT[_cpu] = <PyObject *> np.concatenate
+_COSH[_cpu] = <PyObject *> np.cosh
+_TANH[_cpu] = <PyObject *> np.tanh
+_RECIPROCAL[_cpu] = <PyObject *> np.reciprocal
+_LINSPACE[_cpu] = <PyObject *> np.linspace
+_HIST[_cpu] = <PyObject *> np.histogram
 
+# RANDOM
+_RANDOM_CHOICE[_cpu] = <PyObject *> np.random.choice
 
 # Intern GPU functions if available.
 if _is_gpu_available():
@@ -53,7 +64,10 @@ if _is_gpu_available():
     _DIV[_gpu] = <PyObject *> cp.divide
     _POW[_gpu] = <PyObject *> cp.power
     _SUM[_gpu] = <PyObject *> cp.sum
+    _ABS[_gpu] = <PyObject *> cp.abs
     _MEAN[_gpu] = <PyObject *> cp.mean
+    _STD[_gpu] = <PyObject *> cp.std
+    _VAR[_gpu] = <PyObject *> cp.var
     _MAX[_gpu] = <PyObject *> cp.max
     _MIN[_gpu] = <PyObject *> cp.min
     _ARGMAX[_gpu] = <PyObject *> cp.argmax
@@ -74,6 +88,15 @@ if _is_gpu_available():
     _MAXIMUM[_gpu] = <PyObject *> cp.maximum
     _SQUEEZE[_gpu] = <PyObject *> cp.squeeze
     _STACK[_gpu] = <PyObject *> cp.stack
+    _CONCAT[_gpu] = <PyObject *> cp.concatenate
+    _COSH[_gpu] = <PyObject *> cp.cosh
+    _TANH[_gpu] = <PyObject *> cp.tanh
+    _RECIPROCAL[_gpu] = <PyObject *> cp.reciprocal
+    _LINSPACE[_gpu] = <PyObject *> cp.linspace
+    _HIST[_gpu] = <PyObject *> cp.histogram
+
+    # RANDOM
+    _RANDOM_CHOICE[_gpu] = <PyObject *> cp.random.choice
 
 
 ## INTERN HELPER FUNCTIONS ##
@@ -102,8 +125,17 @@ cdef object _pow(int dev):
 cdef object _sum(int dev):
     return <object> _SUM[dev]
 
+cdef object _abs(int dev):
+    return <object> _ABS[dev]
+
 cdef object _mean(int dev):
     return <object> _MEAN[dev]
+
+cdef object _std(int dev):
+    return <object> _STD[dev]
+
+cdef object _var(int dev):
+    return <object> _VAR[dev]
 
 cdef object _max(int dev):
     return <object> _MAX[dev]
@@ -164,5 +196,27 @@ cdef object _squeeze(int dev):
 
 cdef object _stack(int dev):
     return <object> _STACK[dev]
+
+cdef object _concat(int dev):
+    return <object> _CONCAT[dev]
+
+cdef object _cosh(int dev):
+    return <object> _COSH[dev]
+
+cdef object _tanh(int dev):
+    return <object> _TANH[dev]
+
+cdef object _reciprocal(int dev):
+    return <object> _RECIPROCAL[dev]
+
+cdef object _linspace(int dev):
+    return <object> _LINSPACE[dev]
+
+cdef object _hist(int dev):
+    return <object> _HIST[dev]
+
+# RANDOM
+cdef object _random_choice(int dev):
+    return <object> _RANDOM_CHOICE[dev]
 
 ## INTERN HELPER FUNCTIONS END ##

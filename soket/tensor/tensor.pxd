@@ -3,6 +3,7 @@ from cpython.tuple cimport PyTuple_GET_SIZE, PyTuple_GET_ITEM
 from soket.backend cimport Device
 from soket.dtype cimport DType
 from libc.stdlib cimport malloc, free, qsort
+cimport numpy as np
 
 
 cdef struct TensorTriad:
@@ -77,7 +78,10 @@ cdef enum OpType:
     SCALAR_POW,
     BROADCAST_TO,
     SUMMATION,
+    ABS,
     MEAN,
+    STD,
+    VAR,
     MAX,
     MIN,
     MATMUL,
@@ -97,6 +101,7 @@ cdef enum OpType:
 
     # Acvitation operations
     RELU,
+    TANH,
 
     # Invalid operation, used to denote leaf tensor
     INVALID = -1
@@ -273,6 +278,8 @@ cdef class Tensor:
     cdef bint _retain_grad
 
     # For caching values, useful for both forward and backward pass
+    # TODO: ADD NULL AT THE END TO TERMINATE VALUE_CACHE WHEN BUILDING FROM
+    #       TENSOR.
     cdef int _n_value_cache
     cdef PyObject **_value_cache
 
@@ -281,6 +288,8 @@ cdef class Tensor:
     cpdef Tensor to(self, Device device)
     cpdef Tensor copy(self, requires_grad=?)
     cpdef void backward(self, Tensor adj=?)
+    cpdef Tensor abs(self)
+    cpdef np.ndarray numpy(self)
 
     ## METHODS END ##
 
@@ -344,6 +353,8 @@ cdef class Tensor:
     cdef Tensor _broadcast_to(self, tuple other)
     cdef Tensor _sum(self, tuple axes, DType dtype, keepdims)
     cdef Tensor _mean(self, tuple axes, DType dtype, keepdims)
+    cdef Tensor _std(self, tuple axes, DType dtype, keepdims, correction)
+    cdef Tensor _var(self, tuple axes, DType dtype, keepdims, correction)
     cdef Tensor _max(self, tuple axes, DType dtype, keepdims)
     cdef Tensor _min(self, tuple axes, DType dtype, keepdims)
     cdef Tensor _matmul(self, Tensor other)

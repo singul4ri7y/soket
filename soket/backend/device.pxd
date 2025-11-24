@@ -26,6 +26,7 @@ cdef class Device:
     cdef object _rand_fn
     cdef object _randn_fn
     cdef object _binomial_fn
+    cdef object _randint_fn
     cdef object _zeros_fn
     cdef object _ones_fn
     cdef object _eye_fn
@@ -56,6 +57,7 @@ cdef class Device:
     cdef object _rand(self, tuple shape, object low, object high, str dtype)
     cdef object _randn(self, tuple shape, object mean, object std, str dtype)
     cdef object _randb(self, tuple shape, object p, str dtype)
+    cdef object _randint(self, object low, object high, tuple shape, str dtype)
     cdef object _zeros(self, tuple shape, str dtype)
     cdef object _ones(self, tuple shape, str dtype)
     cdef object _one_hot(self, object i, object num_classes, str dtype)

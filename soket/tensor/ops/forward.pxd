@@ -22,7 +22,10 @@ cdef object _broadcast_to_fwd(Tensor target, object x, object y, object Z)
 
 cdef object _sum_fwd(Tensor target, object x, object y, object Z)
 
+cdef object _abs_fwd(Tensor target, object x, object y, object Z)
 cdef object _mean_fwd(Tensor target, object x, object y, object Z)
+cdef object _std_fwd(Tensor target, object x, object y, object Z)
+cdef object _var_fwd(Tensor target, object x, object y, object Z)
 
 cdef object _max_fwd(Tensor target, object x, object y, object Z)
 cdef object _min_fwd(Tensor target, object x, object y, object Z)
@@ -48,3 +51,5 @@ cdef object _logsumexp_fwd(Tensor target, object x, object y, object Z)
 cdef object _sxentropyloss_fwd(Tensor target, object x, object y, object Z)
 
 cdef object _bnorm_fwd(Tensor target, object x, object y, object Z)
+
+cdef object _tanh_fwd(Tensor target, object x, object y, object Z)

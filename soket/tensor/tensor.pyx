@@ -1,7 +1,8 @@
 from cpython.ref cimport Py_XINCREF, Py_XDECREF
 from cpython.object cimport Py_TYPE, PyTypeObject
-from cpython.tuple cimport PyTuple_GET_SIZE, PyTuple_GET_ITEM
-from cpython.long cimport PyLong_FromLong
+from cpython.tuple cimport PyTuple_GET_SIZE, PyTuple_GET_ITEM, PyTuple_SET_ITEM
+from cpython.long cimport PyLong_FromLong, PyLong_AsLong
+from cpython.float cimport PyFloat_FromDouble
 from cpython.slice cimport PySlice_GetIndicesEx
 from cython cimport freelist
 from soket.backend cimport (_default_device, _is_gpu_available,
@@ -14,8 +15,7 @@ from soket.tensor.ops.intern cimport (_copy, _equal, _not_equal, _greater,
 from soket.tensor.creation cimport _ones_like
 from soket.autodiff cimport _compute_gradient
 from libc.string cimport memcpy, memcmp
-from libc.stdlib cimport calloc, free
-cimport numpy as np
+from libc.stdlib cimport realloc, calloc, free
 cimport cupy as cp
 import numpy as np
 
@@ -49,6 +49,38 @@ cpdef lazy(enabled=None):
 
     global _LAZY_STATE
     _LAZY_STATE = <bint> enabled
+
+
+## SOKET TENSOR ITERATOR ##
+
+cdef class TensorIterator:
+    ''' Tensor iterator to iterate over first tensor dimension. '''
+
+    cdef Tensor _x
+    cdef int _idx
+
+    def __init__(self, Tensor X):
+        self._x = X
+        self._idx = 0
+
+    def __iter__(self):
+        ''' Prepare the iterator. '''
+
+        self._idx = 0
+        return self
+
+    def __next__(self):
+        ''' Get next item in the iterator. '''
+
+        if self._idx >= self._x._shape[0]:
+            raise StopIteration()
+
+        cdef object value = self._x._getitem(PyLong_FromLong(self._idx))
+        self._idx += 1
+
+        return value
+
+## SOKET TENSOR ITERATOR END ##
 
 
 ## OPS ##
@@ -147,11 +179,35 @@ cdef Op _op_sum = Op(
 )
 
 
+# ABS
+cdef Op _op_abs = Op(
+    _abs_fwd,
+    _abs_bwd,
+    OpType.ABS
+)
+
+
 # MEAN
 cdef Op _op_mean = Op(
     _mean_fwd,
     _mean_bwd,
     OpType.MEAN
+)
+
+
+# STANDARD DEVIATION
+cdef Op _op_std = Op(
+    _std_fwd,
+    _std_bwd,
+    OpType.STD
+)
+
+
+# VARIANCE
+cdef Op _op_var = Op(
+    _var_fwd,
+    _var_bwd,
+    OpType.VAR
 )
 
 
@@ -161,7 +217,6 @@ cdef Op _op_max = Op(
     _max_bwd,
     OpType.MAX
 )
-
 cdef Op _op_min = Op(
     _min_fwd,
     _min_bwd,
@@ -346,6 +401,26 @@ cdef int _get_slice_length(slice slice, Py_ssize_t dim) except -1:
 
     return <int> slicelength
 
+cdef (int, int) _process_tensor_slice(
+    int *shape,
+    int nshape,
+    int capacity,
+    Tensor ten
+):
+    ''' Processes a tensor slice. '''
+
+    # Check for memory overflow
+    cdef int new_nshape = nshape + ten._nshape
+    if new_nshape >= capacity:
+        capacity = new_nshape * 2
+        shape = <int *> realloc(shape, capacity * sizeof(int))
+
+        if shape == NULL:
+            raise MemoryError('Cannot reallocate memory to store shape!')
+
+    memcpy(shape + nshape, ten._shape, ten._nshape * sizeof(int))
+    return new_nshape, capacity
+
 ## HELPER DATA-STRUCTURES AND FUNCTIONS ##
 
 
@@ -488,6 +563,51 @@ cdef class Tensor:
         ''' Set element(s) to a tensor. '''
 
         self._setitem(idx, value)
+
+    def __len__(self) -> int:
+        ''' Returns the length of the ndarray. '''
+
+        if self._nshape == 0:  # scalar
+            raise TypeError('Attempt to call len() on a scalar tensor')
+
+        return PyLong_FromLong(self._shape[0])
+
+    # Iterator
+    def __iter__(self) -> TensorIterator:
+        ''' Return a TensorIterator for item iteration. '''
+
+        if self._nshape == 0:
+            raise TypeError('Attempt to iterate over a 0D tensor.')
+
+        return TensorIterator(self)
+
+    # Array protocol
+    def __array__(self) -> np.ndarray:
+        '''
+        NumPy array protocol to seamlessly convert to NumPy array, using
+        funtions like: np.asanyarray() or np.asarray().
+        '''
+
+        return self.numpy()
+
+    def __index__(self) -> int:
+        ''' When a tensor is used as a slice index. '''
+
+        cdef int di = self._dtype._idx
+        if di < 3 or di > 10:  # from int8 to uint64
+            raise TypeError('Only integer tensors can be converted to index!')
+
+        # scalar
+        cdef Py_ssize_t size = 1
+        for i in range(self._nshape):
+            size *= self._shape[i]
+
+        if size != 1:
+            raise TypeError(
+                'Only tensors with a single element can be converted to index!'
+            )
+
+        return self._compute_data().item()
 
     def __repr__(self) -> str:
         ''' Tensor representation. '''
@@ -635,7 +755,7 @@ cdef class Tensor:
                 raise RuntimeError('Incompatible adjoint device!')
 
             # Datatype compatibility
-            if self._dtype._idx != adj._dtype.idx:
+            if self._dtype._idx != adj._dtype._idx:
                 raise RuntimeError('Incompatible adjoint datatype!')
 
             # Shape compatibility
@@ -651,6 +771,19 @@ cdef class Tensor:
                 self._dtype,
                 False
             ) if adj is None else adj
+        )
+
+    cpdef Tensor abs(self):
+        ''' Return a tensor with absolute values of the elements. '''
+
+        return Tensor._make_from_op(
+            _op_abs,
+            TensorTriad(<PyObject *> self, NULL, NULL),
+            self._device,
+            self._dtype,
+            self._shape, self._nshape,
+            True,
+            NULL, 0
         )
 
     def broadcast_to(self, *shape) -> Tensor:
@@ -669,6 +802,40 @@ cdef class Tensor:
 
         dtype = self._dtype if dtype is None else dtype
         return self._mean(_get_proper_reduction_axes(shape), dtype, keepdims)
+
+    def std(
+        self,
+        *shape,
+        DType dtype=None,
+        keepdims=False,
+        correction=1
+    ) -> Tensor:
+        ''' Computes the standard deviation along the specific axes. '''
+
+        dtype = self._dtype if dtype is None else dtype
+        return self._std(
+            _get_proper_reduction_axes(shape),
+            dtype,
+            keepdims,
+            correction
+        )
+
+    def var(
+        self,
+        *shape,
+        DType dtype=None,
+        keepdims=False,
+        correction=1
+    ) -> Tensor:
+        ''' Computes the variance along the specific axes. '''
+
+        dtype = self._dtype if dtype is None else dtype
+        return self._var(
+            _get_proper_reduction_axes(shape),
+            dtype,
+            keepdims,
+            correction
+        )
 
     def max(self, *shape, DType dtype=None, keepdims=False) -> Tensor:
         ''' Find maximum value(s) in given axes. '''
@@ -715,10 +882,28 @@ cdef class Tensor:
     def item(self) -> any:
         ''' Get scalar tensor element. '''
 
-        if self._nshape != 0:
-            raise ValueError('Can only call Tensor.item() on scalar tensors')
+        # Tensor size
+        cdef Py_ssize_t size = 1
+        for i in range(self._nshape):
+            size *= self._shape[i]
+
+        if size != 1:
+            raise ValueError(
+                f'Tensor with {size} elements cannot be converted to scalar!'
+            )
 
         return self._compute_data().item()
+
+    cpdef np.ndarray numpy(self):
+        ''' Convert tensor data to NumPy and return. '''
+
+        # CuPy (GPU)
+        if (_is_gpu_available() and Py_TYPE(self._data_) is <PyTypeObject *>
+        cp_ndarray):
+            return cp_asnumpy(self._data_)
+
+        # NumPy (CPU)
+        return <np.ndarray> _array(0)(self._data_)
 
     def retain_grad(self) -> None:
         '''
@@ -1713,7 +1898,7 @@ cdef class Tensor:
 
         cdef int *shape
         cdef int nshape
-        cdef int new_shape_idx
+        cdef int size
 
         shape, nshape = _validate_and_create_reduction_axes(
             axes,
@@ -1723,16 +1908,20 @@ cdef class Tensor:
 
         # Find the number of observations
         cdef long observations = 1
-        if self._nshape == self._nshape:
+        if self._nshape == nshape:  # keepdims=True
             for i in range(nshape):
                 if self._shape[i] != shape[i]:
                     observations *= self._shape[i]
         else:
-            new_shape_idx = 0
-            for i in range(self._nshape):
-                if self._shape[i] != shape[new_shape_idx]:
+            if nshape == 0:  # scalar
+                for i in range(self._nshape):
                     observations *= self._shape[i]
-                else: new_shape_idx += 1
+            else:
+                size = PyTuple_GET_SIZE(axes)
+                for i in range(size):
+                    observations *= self._shape[
+                        PyLong_AsLong(<object> PyTuple_GET_ITEM(axes, i))
+                    ]
 
         cdef object py_observations = PyLong_FromLong(observations)
 
@@ -1755,6 +1944,122 @@ cdef class Tensor:
             shape, nshape,
             False,
             value_cache, 3
+        )
+
+    cdef Tensor _std(self, tuple axes, DType dtype, keepdims, correction):
+        ''' Computes the standard deviation of tensor elements (C ONLY). '''
+
+        cdef int *shape
+        cdef int nshape
+        cdef int size
+
+        shape, nshape = _validate_and_create_reduction_axes(
+            axes,
+            self._shape, self._nshape,
+            keepdims is True
+        )
+
+        # Find the number of observations
+        cdef long observations = 1
+        if self._nshape == nshape:  # keepdims=True
+            for i in range(nshape):
+                if self._shape[i] != shape[i]:
+                    observations *= self._shape[i]
+        else:
+            if nshape == 0:  # scalar
+                for i in range(self._nshape):
+                    observations *= self._shape[i]
+            else:
+                size = PyTuple_GET_SIZE(axes)
+                for i in range(size):
+                    observations *= self._shape[
+                        PyLong_AsLong(<object> PyTuple_GET_ITEM(axes, i))
+                    ]
+
+        # Apply correction
+        observations -= PyLong_AsLong(correction)
+        observations = 0 if observations < 0 else observations
+        cdef object py_observations = PyLong_FromLong(observations)
+
+        # Compute standard deviation over all axis
+        if nshape == 0:
+            axes = None
+
+        # Value cache
+        cdef (PyObject *)[5] value_cache = [
+            <PyObject *> axes,
+            <PyObject *> keepdims,
+            <PyObject *> py_observations,
+            <PyObject *> None,  # mean
+            <PyObject *> correction
+        ]
+
+        return Tensor._make_from_op(
+            _op_std,
+            TensorTriad(<PyObject *> self, NULL, NULL),
+            self._device,
+            dtype,
+            shape, nshape,
+            False,
+            value_cache, 5
+        )
+
+    cdef Tensor _var(self, tuple axes, DType dtype, keepdims, correction):
+        ''' Computes the variance of tensor elements over some axes (C ONLY). '''
+
+        cdef int *shape
+        cdef int nshape
+        cdef int size
+
+        shape, nshape = _validate_and_create_reduction_axes(
+            axes,
+            self._shape, self._nshape,
+            keepdims is True
+        )
+
+        # Find the number of observations
+        cdef double observations = 1
+        if self._nshape == nshape:  # keepdims=True
+            for i in range(nshape):
+                if self._shape[i] != shape[i]:
+                    observations *= self._shape[i]
+        else:
+            if nshape == 0:  # scalar
+                for i in range(self._nshape):
+                    observations *= self._shape[i]
+            else:
+                size = PyTuple_GET_SIZE(axes)
+                for i in range(size):
+                    observations *= self._shape[
+                        PyLong_AsLong(<object> PyTuple_GET_ITEM(axes, i))
+                    ]
+
+        # Apply correction
+        observations -= PyLong_AsLong(correction)
+        observations = 2 / (0 if observations < 0 else observations)
+        cdef object py_observations = PyFloat_FromDouble(observations)
+
+        # Compute standard deviation over all axis
+        if nshape == 0:
+            axes = None
+
+        # Value cache
+        cdef (PyObject *)[5] value_cache = [
+            <PyObject *> axes,
+            <PyObject *> keepdims,
+            <PyObject *> py_observations,
+            <PyObject *> None,  # mean
+            <PyObject *> correction
+        ]
+
+        return Tensor._make_from_op(
+            _op_var,
+            TensorTriad(<PyObject *> self, NULL, NULL),
+            self._device,
+            dtype,
+            shape, nshape,
+            False,
+            value_cache, 5
         )
 
     cdef Tensor _max(self, tuple axes, DType dtype, keepdims):
@@ -1874,10 +2179,26 @@ cdef class Tensor:
 
         cdef int sh
         cdef int new_shape_size = 1
+        cdef int inferred_i = -1
         for i in range(new_nshape):
             sh = <int> <object> PyTuple_GET_ITEM(shape, i)
-            new_shape_size *= sh
-            new_shape[i] = sh
+            if sh < 0:
+                if inferred_i != -1:
+                    free(new_shape)
+                    raise ValueError('Can only infer one dimension!')
+                inferred_i = i
+            else:
+                new_shape_size *= sh
+                new_shape[i] = sh
+
+        # Inferred dimension
+        cdef int inferred_dim
+        if inferred_i != -1:
+            inferred_dim = self_size / new_shape_size  # Index variable as shape
+            new_shape_size *= inferred_dim
+
+            # Plug in the inferred dimension
+            new_shape[inferred_i] = inferred_dim
 
         if self_size != new_shape_size:
             free(new_shape)
@@ -1976,16 +2297,18 @@ cdef class Tensor:
             NULL, 0
         )
 
-    cdef Tensor _getitem(self, idx: int | slice | tuple[int | slice]):
+    cdef Tensor _getitem(self, idx: int | slice | tuple[int | slice] | Tensor):
         ''' Get element(s) from given indicies (C ONLY). '''
 
         # Python scope forward declarations
         cdef int axis
         cdef object index
+        cdef Tensor ten_idx
 
         cdef int *shape = <int *> malloc(self._nshape * sizeof(int))
         if shape == NULL:
             raise MemoryError('Failed to create memory for select shape!')
+        cdef int capacity = self._nshape
         cdef int nshape = 0
 
         cdef Py_ssize_t i = 0
@@ -1997,11 +2320,20 @@ cdef class Tensor:
                 raise ValueError(f'Select index out of bounds - {idx}')
 
             i += 1
+        elif Py_TYPE(idx) is <PyTypeObject *> Tensor:
+            ten_idx = <Tensor> idx
+            nshape, capacity = _process_tensor_slice(
+                shape, nshape, capacity,
+                ten_idx
+            )
+
+            idx = ten_idx._compute_data()
+            i += 1
         elif Py_TYPE(idx) is <PyTypeObject *> slice:
             shape[nshape] = _get_slice_length(<slice> idx, self._shape[i])
             nshape += 1
             i += 1
-        else:  # tuple
+        elif Py_TYPE(idx) is <PyTypeObject *> tuple:  # tuple
             for i in range(PyTuple_GET_SIZE(<tuple> idx)):
                 index = <object> PyTuple_GET_ITEM(idx, i)
 
@@ -2019,8 +2351,17 @@ cdef class Tensor:
                         self._shape[i]
                     )
                     nshape += 1
+                elif Py_TYPE(index) is <PyTypeObject *> Tensor:
+                    ten_idx = <Tensor> index
+                    nshape, capacity = _process_tensor_slice(
+                        shape, nshape, capacity,
+                        ten_idx
+                    )
+                    PyTuple_SET_ITEM(idx, i, <object> ten_idx._compute_data())
 
             i += 1  # i + 1: Python for loops are unlike C
+        else:
+            raise ValueError('Unrecognized index type!')
 
         # Copy remaining shape
         while i < self._nshape:

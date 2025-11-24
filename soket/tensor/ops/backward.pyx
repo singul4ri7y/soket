@@ -23,6 +23,7 @@ cdef Tensor _create_tensor_node_like(Tensor node, object data, DType dtype):
         False
     )
 
+
 cdef Tensor _create_matmul_tensor_node_like(
     Tensor node,
     Tensor input,
@@ -604,6 +605,43 @@ cdef TensorTriad _sum_bwd(
     return output
 
 
+cdef TensorTriad _abs_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+):
+    ''' Backward pass for abs() operation. '''
+
+    cdef TensorTriad output = TensorTriad(NULL, NULL, NULL)
+    cdef int didx = node._device._dev_idx
+    cdef Tensor grad
+    cdef x_data = x._compute_data()
+    cdef adj_data = adj._compute_data()
+
+    if x._requires_grad:
+        grad = _create_tensor_node_like(
+            node,
+            _sub(didx)(
+                _mul(didx)(
+                    _greater(didx)(x_data, 0),
+                    adj_data,
+                    dtype=node._dtype._str()
+                ),
+                _mul(didx)(
+                    _less(didx)(x_data, 0),
+                    adj_data,
+                    dtype=node._dtype._str()
+                )
+            ),
+            node._dtype
+        )
+
+        Py_XINCREF(<PyObject *> grad)
+        output.x = <PyObject *> grad
+
+    return output
+
+
 cdef TensorTriad _mean_bwd(
     Tensor node,
     Tensor adj,
@@ -626,6 +664,75 @@ cdef TensorTriad _mean_bwd(
         )
 
     return output
+
+
+cdef TensorTriad _std_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+):
+    ''' Backward pass for std operation. '''
+
+    cdef TensorTriad output = TensorTriad(NULL, NULL, NULL)
+    cdef int didx = node._device._dev_idx
+    cdef object observ = <object> node._value_cache[2]
+    cdef object mean = <object> node._value_cache[3]
+    cdef Tensor grad
+    cdef object prefix
+
+    if x._requires_grad:
+        # N * std
+        prefix = _mul(didx)(observ, node._compute_data())
+        # 1 / (N * std)
+        prefix = _reciprocal(didx)(prefix)
+
+        # adj * sum_bwd((x - mean) ** 2)
+        # sum_bwd((x - mean) ** 2) == sum_bwd(x)
+        # Take a peek at the _sum_bwd() fn for more info
+        output = _sum_bwd(node, adj, x, y, Z)
+
+        # (adj / (N * std)) * sum_bwd((x - mean) ** 2) * (x - mean)
+        grad = <Tensor> output.x
+        grad._data_ = _mul(didx)(
+            prefix, _mul(didx)(
+                grad._data_,
+                _sub(didx)(x._compute_data(), mean)
+            )
+        )
+
+    return output
+
+
+cdef TensorTriad _var_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+):
+    ''' Backward pass for computing variance. '''
+
+    cdef TensorTriad output = TensorTriad(NULL, NULL, NULL)
+    cdef int didx = node._device._dev_idx
+    cdef object observ = <object> node._value_cache[2]  # 2 / N
+    cdef object mean = <object> node._value_cache[3]
+    cdef Tensor grad
+
+    if x._requires_grad:
+        # adj * sum_bwd((x - mean) ** 2)
+        # sum_bwd((x - mean) ** 2) == sum_bwd(x)
+        # Take a peek at the _sum_bwd() fn for more info
+        output = _sum_bwd(node, adj, x, y, Z)
+
+        # (adj / (N * std)) * sum_bwd((x - mean) ** 2) * (x - mean)
+        grad = <Tensor> output.x
+        grad._data_ = _mul(didx)(
+            observ, _mul(didx)(
+                grad._data_,
+                _sub(didx)(x._compute_data(), mean)
+            )
+        )
+
+    return output
+
 
 cdef TensorTriad _max_bwd(
     Tensor node,
@@ -1130,3 +1237,34 @@ cdef TensorTriad _bnorm_bwd(
         output.Z = <PyObject *> grad
 
     return output
+
+
+cdef TensorTriad _tanh_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+):
+    ''' Backward pass for hyperbolic tangent operation. '''
+
+    cdef int didx = node._device._dev_idx
+    cdef TensorTriad output = TensorTriad(NULL, NULL, NULL)
+    cdef Tensor grad
+    cdef object node_data = node._compute_data()
+    cdef object node_data_sq = _mul(didx)(node_data, node_data)
+
+    if x._requires_grad:
+        # d(tanhx)/dx = sechx ** 2 = 1 - (tanhx ** 2)
+
+        grad = _create_tensor_node_like(
+            node,
+            _mul(didx)(
+                _sub(didx)(1.0, node_data_sq),
+                adj._compute_data()
+            ),
+            node._dtype
+        )
+        Py_XINCREF(<PyObject *> grad)
+        output.x = <PyObject *> grad
+
+    return output
+

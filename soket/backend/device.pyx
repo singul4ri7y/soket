@@ -61,9 +61,11 @@ cdef class Device:
             self._backend = numpy
 
         # Do function interning to reduce overhead
-        self._rand_fn = self._backend.random.uniform
-        self._randn_fn = self._backend.random.normal
+        # TODO: Bad implementation. FIXME.
+        self._rand_fn = self._backend.random.default_rng().uniform
+        self._randn_fn = self._backend.random.default_rng().standard_normal
         self._binomial_fn = self._backend.random.binomial
+        self._randint_fn = self._backend.random.randint
         self._zeros_fn = self._backend.zeros
         self._ones_fn = self._backend.ones
         self._eye_fn = self._backend.eye
@@ -201,6 +203,8 @@ cdef class Device:
 
     ## DEVICE SPECIFIC TENSOR CREATION OPS ##
 
+    # TODO: SEPARATE THESE FUNCTIONS.
+
     cdef object _rand(self, tuple shape, object low, object high, str dtype):
         '''
         Returns samples from an uniform distribution of interval [low, high).
@@ -213,7 +217,7 @@ cdef class Device:
         Returns samples from a normal distribution of provided mean and variance.
         '''
 
-        return self._randn_fn(mean, std, shape).astype(dtype)
+        return self._randn_fn(shape, dtype) * std + mean
 
     cdef object _randb(self, tuple shape, object p, str dtype):
         '''
@@ -222,6 +226,13 @@ cdef class Device:
         '''
 
         return self._binomial_fn(1, p, shape).astype(dtype)
+
+    cdef object _randint(self, object low, object high, tuple size, str dtype):
+        '''
+        Returns data filled with random integers from low to high.
+        '''
+
+        return self._randint_fn(low, high, size, dtype)
 
     cdef object _zeros(self, tuple shape, str dtype):
         ''' Return tensor/ndarray filled with zeros. '''

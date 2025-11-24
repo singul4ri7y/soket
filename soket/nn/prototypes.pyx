@@ -7,16 +7,17 @@ from cpython.tuple cimport (PyTuple_GET_SIZE, PyTuple_GET_ITEM, PyTuple_New,
 from cpython.list cimport PyList_GET_SIZE
 from soket.nn.module cimport Module
 from soket.tensor cimport Tensor, Op, OpType, TensorTriad
-from soket.tensor.creation cimport _randb, _ones, _zeros, _one_hot
-from soket.tensor.ops cimport (_relu_fwd, _relu_bwd, _sxentropyloss_fwd,
-    _sxentropyloss_bwd)
+from soket.tensor.creation cimport _randb, _ones, _zeros
+from soket.tensor.detached cimport tanh
+from soket.tensor.ops cimport _relu_fwd, _relu_bwd
 from soket.tensor.ops.intern cimport _transpose
 from soket.backend cimport Device, DeviceType, _default_device
 from soket.dtype cimport DType, _default_datatype
-from soket.nn.functional cimport batch_norm, layer_norm
+from soket.nn.functional cimport *
 from libc.stdlib cimport malloc, realloc
 from libc.string cimport memcmp
 from collections import OrderedDict
+from soket.tensor import rand, randn
 
 
 cdef class Identity(Module):
@@ -71,20 +72,27 @@ cdef class Linear(Module):
         if self._storage == NULL:
             raise MemoryError('Cannot allocate memory for linear parameters!')
 
-        # Store weight
+        # Initialize and store parameters
+        cdef object k = 1 / feature_in
+
+        # weight
         ## self._storage[0] -> Weight
-        cdef Tensor ten = _zeros(
+        cdef Tensor ten = rand(
             (feature_in, feature_out),
-            device, dtype, True
+            low=-k, high=k,
+            device=device, dtype=dtype,
+            requires_grad=True
         )
         Py_XINCREF(<PyObject *> ten)
         self._storage[0] = <PyObject *> ten
 
-        # Store bias if needed
+        # bias (if needed)
         ## self._storage[1] -> Bias
-        ten = _zeros(
+        ten = rand(
             (feature_out,),
-            device, dtype, True
+            low=-k, high=k,
+            device=device, dtype=dtype,
+            requires_grad=True
         ) if bias else None
         Py_XINCREF(<PyObject *> ten)
         self._storage[1] = <PyObject *> ten
@@ -109,8 +117,9 @@ cdef class Linear(Module):
         cdef Tensor Y = X._matmul(<Tensor> self._storage[0])  # weight
 
         # Add bias if available
-        if self._storage[1] != NULL:
-            Y = Y._add(<Tensor> self._storage[1])
+        cdef Tensor bias = <Tensor> self._storage[1]
+        if bias != None:
+            Y = Y._add(bias)
 
         return Y
 
@@ -321,6 +330,32 @@ cdef class ReLU(Module):
 
     ## DUNDER METHODS END ##
 
+
+cdef class Tanh(Module):
+    ''' Tanh activation layer. '''
+
+    def __init__(self):
+        super().__init__()
+
+        # Builtin module
+        self._builtin = True
+
+    ## CDEF METHODS ##
+
+    cdef Tensor _fast_forward(self, Tensor X, object y):
+        return tanh(X)
+
+    ## CDEF METHODS END ##
+
+    ## DUNDER METHODS ##
+
+    def __str__(self) -> str:
+        ''' Stringification of Tanh activation module. '''
+
+        return 'soket.nn.Tanh()'
+
+    ## DUNDER METHODS END ##
+
 ## ACTIVATION MODULES END ##
 
 
@@ -343,135 +378,15 @@ cdef class SoftmaxCrossEntropyLoss(Module):
         # Builtin module
         self._builtin = True
 
-        # Reduction axes
-        self._axes_zero = (0,)
-        self._axes_one = (1,)
-
         if reduction != 'sum' and reduction != 'mean' and reduction != 'none':
             raise ValueError(f'Invalid reduction type - {reduction}')
 
         self._reduction = reduction
 
-        # Is batch dimension getting reduced?
-        if reduction == 'sum' or reduction == 'mean':
-            self._batch_reduction = True
-
     ## CDEF METHODS ##
 
     cdef Tensor _fast_forward(self, Tensor X, object y):
-        # Check for valid input
-        if X is None or y is None:
-            raise ValueError('Expected tensors as inputs, got None instead')
-
-        cdef Tensor targets = <Tensor> y
-        if X._device._ne(targets._device):
-            raise RuntimeError('Incompatible device of classes and targets!')
-
-        if X._nshape == 0:
-            raise ValueError('Expected the classes tensor to be atleast 1D!')
-
-        # Check for shape compatibility.
-        # w/o batch
-        if X._nshape == 1:
-            if targets._nshape >= 1:
-                raise ValueError(
-                    'Incompatible targets tensor, expected shape to be ()'
-                )
-        # with batch
-        elif X._nshape >= 2:
-            if (targets._nshape + 1 != X._nshape or
-            X._shape[0] != targets._shape[0] or
-
-            # test channels
-            memcmp(X._shape + 2, targets._shape + 1, (X._nshape - 2) *
-            sizeof(int))):
-                raise ValueError(
-                    f'Incompatible targets tensor shape - '
-                    f'{X.shape} and {targets.shape}'
-                )
-
-        # LogSumExp reduction axes
-        cdef tuple axes = self._axes_one if X._nshape >= 2 else self._axes_zero
-
-        # LogSumExp reduce axis
-        cdef int r_axis = 0 + X._nshape >= 2
-
-        # One hot encoded target
-        cdef int num_classes = X._shape[r_axis]
-        cdef object one_hot = _one_hot(
-            targets,
-            num_classes,
-            X._device,
-            X._dtype,
-            False
-        )._compute_data()
-
-        # If dealing with extra channels
-        cdef tuple permute_axis
-        cdef Py_ssize_t i
-        cdef int idx
-        if targets._nshape > 2:
-            # TODO: Performance hit is pretty bad. FIX ME.
-            permute_axis = PyTuple_New(X._nshape)
-            PyTuple_SET_ITEM(permute_axis, 0, 0)
-
-            # One hot encoded dimension should be right beside the batch
-            PyTuple_SET_ITEM(permute_axis, 1, X._nshape - 1)
-
-            idx = 2
-            for i in range(1, X._nshape - 1):
-                PyTuple_SET_ITEM(permute_axis, idx, i)
-                idx += 1
-
-            # Permute shape
-            one_hot = _transpose(X._device._dev_idx)(
-                one_hot, permute_axis
-            )
-
-        # Calculate new tensor shape.
-        cdef int *shape
-        cdef int nshape
-
-        if X._nshape == 1:
-            # scalar
-            shape = <int *> malloc(0)
-            nshape = 0
-        else:
-            nshape = X._nshape - 1 - self._batch_reduction
-            shape = <int *> malloc(nshape * sizeof(int))
-            if shape == NULL:
-                raise MemoryError(
-                    'Failed to allocate shape for cross-entropy loss!'
-                )
-
-            idx = 0
-            for i in range(self._batch_reduction, X._nshape):
-                if i == r_axis:
-                    continue
-
-                shape[idx] = X._shape[i]
-                idx += 1
-
-        cdef (PyObject *)[4] value_cache = [
-            <PyObject *> axes,
-            <PyObject *> <object> False,
-            <PyObject *> one_hot,
-            <PyObject *> self._reduction,
-        ]
-
-        return Tensor._make_from_op(
-            Op(
-                _sxentropyloss_fwd,
-                _sxentropyloss_bwd,
-                OpType.SXENTROPYLOSS
-            ),
-            TensorTriad(<PyObject *> X, NULL, NULL),
-            X._device,
-            X._dtype,
-            shape, nshape,
-            False,
-            value_cache, 4
-        )
+        return softmax_cross_entropy(X, <Tensor> y, self._reduction)
 
     ## CDEF METHODS END ##
 
@@ -494,6 +409,7 @@ cdef class _BatchNormBase(Module):
     ''' Batch normalization base class. '''
 
     # Hyper parameters
+    cdef object _num_features
     cdef object _eps
     cdef object _momentum
 
@@ -516,7 +432,8 @@ cdef class _BatchNormBase(Module):
         # Builtin module
         self._builtin = True
 
-        # Set hyper parameters
+        # Set hyperparameters
+        self._num_features = num_features
         self._eps = eps
         self._momentum = momentum
 
@@ -771,3 +688,82 @@ cdef class Dropout(Module):
     ## DUNDER METHODS END ##
 
 ## REGULARIZATION MODULES END ##
+
+
+## EMBEDDING ##
+
+cdef class Embedding(Module):
+    '''
+    A look-up table storing the embedding vectors of specific dictionary size.
+    '''
+
+    # Hyperparameters
+    cdef object _num_embeddings
+    cdef object _embedding_dim
+
+    def __init__(
+        self,
+        num_embeddings: int,
+        embedding_dim: int,
+        Device device=None,
+        DType dtype=None
+    ):
+        super().__init__()
+
+        # Builtin module
+        self._builtin = True
+        self._num_embeddings = num_embeddings
+        self._embedding_dim = embedding_dim
+
+        # Allocate memory for weight
+        self._nstorage = 1
+        self._storage = <PyObject **> malloc(
+            self._nstorage * sizeof(PyObject *)
+        )
+        if self._storage == NULL:
+            raise MemoryError('Cannot allocate memory to store embedding weight!')
+
+        # self._storage[0] -> Weight
+        cdef Tensor ten = randn(
+            (num_embeddings, embedding_dim),
+            device=device,
+            dtype=dtype,
+            requires_grad=True
+        )
+        Py_XINCREF(<PyObject *> ten)
+        self._storage[0] = <PyObject *> ten
+
+    ## PROPERTIES ##
+
+    @property
+    def weight(self) -> Tensor:
+        ''' Return the embedding lookup table or the weight. '''
+
+        return (<Tensor> self._storage[0])
+
+    ## PROPERTIES END ##
+
+    ## CDEF METHODS ##
+
+    cdef Tensor _fast_forward(self, Tensor X, object y):
+        return embedding(X, <Tensor> self._storage[0])
+
+    ## CDEF METHODS END ##
+
+    ## DUNDER METHODS ##
+
+    def __str__(self) -> str:
+        ''' Stringify the Embedding module. '''
+
+        cdef str res = (f'soket.nn.Embedding({self._num_embeddings}, '
+            f'{self._embedding_dim}')
+
+        cdef Tensor weight = self.weight
+        if weight._device._dev_idx == DeviceType.GPU:
+            res += f', device=GPU:{int(weight._device._id)}'
+
+        return res + ')'
+
+    ## DUNDER METHODS END ##
+
+## EMBEDDING END ##

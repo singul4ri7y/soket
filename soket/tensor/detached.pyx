@@ -1,8 +1,7 @@
 from cpython.object cimport PyObject
-from soket.tensor.tensor cimport (Tensor, Op, OpType, TensorTriad,
+from soket.tensor.tensor cimport (Op, OpType, TensorTriad,
     _get_proper_reduction_axes, _validate_and_create_reduction_axes)
-from soket.tensor.ops cimport (_log_fwd, _log_bwd, _exp_fwd, _exp_bwd,
-    _logsumexp_fwd, _logsumexp_bwd)
+from soket.tensor.ops cimport *
 
 
 def log(Tensor x) -> Tensor:
@@ -76,4 +75,22 @@ def logsumexp(Tensor x, *axes: tuple[int], keepdims: bool = False) -> Tensor:
         shape, nshape,
         False,
         value_cache, 2
+    )
+
+
+cpdef Tensor tanh(Tensor x):
+    ''' Perform hyperbolic tangent operation on tensor. '''
+
+    return Tensor._make_from_op(
+        Op(
+            _tanh_fwd,
+            _tanh_bwd,
+            OpType.TANH
+        ),
+        TensorTriad(<PyObject *> x, NULL, NULL),
+        x._device,
+        x._dtype,
+        x._shape, x._nshape,
+        True,
+        NULL, 0
     )

@@ -15,6 +15,8 @@ def xavier_normal(tensor, gain=1.0):
     tensor.data = soket.randn(tensor.shape, mean=0.0, std=std_sq,
         device=tensor.device, dtype=tensor.dtype)
 
+    return tensor
+
 
 def xavier_uniform(tensor, gain=1.0):
     """ Note: `fan_in` and `fan_out` is calculated assuming the weight is
@@ -27,6 +29,8 @@ def xavier_uniform(tensor, gain=1.0):
 
     tensor.data = soket.rand(tensor.shape, low=-a, high=a,
         device=tensor.device, dtype=tensor.dtype)
+
+    return tensor
 
 
 def _kaiming_prologue(shape: Tuple, mode='fan_in', nonlinearity='relu') -> Tuple[float, int]:
@@ -68,6 +72,8 @@ def kaiming_normal(tensor, mode='fan_in', nonlinearity='relu'):
     tensor.data = soket.randn(tensor.shape, mean=0.0, std=std_sq,
         device=tensor.device, dtype=tensor.dtype)
 
+    return tensor
+
 def kaiming_uniform(tensor, mode='fan_in', nonlinearity='relu'):
     """ Kaiming uniform distribution initialization. """
 
@@ -76,3 +82,5 @@ def kaiming_uniform(tensor, mode='fan_in', nonlinearity='relu'):
 
     tensor.data = soket.rand(tensor.shape, low=-bound, high=bound,
         device=tensor.device, dtype=tensor.dtype)
+
+    return tensor

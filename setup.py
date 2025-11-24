@@ -2,6 +2,7 @@ import os
 from setuptools import setup, Extension, find_packages
 from setuptools.command.build_ext import build_ext as _bext
 from Cython.Build import cythonize
+from multiprocessing import cpu_count
 import numpy
 
 
@@ -25,6 +26,10 @@ class build_debug(_bext):
         self.compiler.set_executable('linker_so', 'gcc' + DEBUG_LFLAGS)
         _bext.build_extensions(self)
 
+    def finalize_options(self):
+        super().finalize_options()
+        self.parallel = cpu_count()
+
 
 class build_release(_bext):
     def build_extensions(self):
@@ -38,6 +43,10 @@ class build_release(_bext):
         self.compiler.set_executable('compiler_cxx', 'g++' + flags)
         self.compiler.set_executable('linker_so', 'gcc' + RELEASE_LFLAGS)
         _bext.build_extensions(self)
+
+    def finalize_options(self):
+        super().finalize_options()
+        self.parallel = cpu_count()
 
 
 if __name__ == '__main__':
@@ -53,15 +62,20 @@ if __name__ == '__main__':
             name=os.path.splitext(path.replace(os.sep, '.'))[0],  # Module name
             sources=[path],
             include_dirs=[numpy.get_include()],
-            define_macros=[('CYTHON_LIMITED_API', '0')]
+            define_macros=[('CYTHON_LIMITED_API', '0')],
+            py_limited_api=False
         )
         for path in cython_files
     ]
 
     setup(
         name='soket',
+        version='0.0.1',
+        python_requires='>=3.13',
         ext_modules=cythonize(
             extensions,
+            annotate=True,
+            nthreads=cpu_count(),
             compiler_directives={
                 'language_level': '3',
                 'boundscheck': False,

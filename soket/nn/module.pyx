@@ -3,6 +3,7 @@ from cpython.object cimport Py_TYPE, PyTypeObject, PyObject_IsInstance
 from cpython.list cimport PyList_GET_SIZE, PyList_GET_ITEM
 from cpython.tuple cimport PyTuple_GET_ITEM, PyTuple_GET_SIZE
 from cpython.dict cimport PyDict_New, PyDict_Next
+from soket.backend cimport Device
 from libc.stdlib cimport free
 from collections.abc import Iterator
 
@@ -41,6 +42,7 @@ def _extract_modules_generator(object value):
                 <object> PyTuple_GET_ITEM(value, i)
             )
 
+
 def _extract_params_generator(object value):
     ''' Generator for all module parameters (including child modules). '''
 
@@ -72,6 +74,38 @@ def _extract_params_generator(object value):
             yield from _extract_params_generator(
                 <object> PyTuple_GET_ITEM(value, i)
             )
+
+
+cdef void _migrate_parameters(object value, Device device):
+    ''' Migrate all parameters to given device. '''
+
+    # Python scope forward declaration
+    cdef Tensor ten
+    cdef Module module
+    cdef PyObject *key
+    cdef PyObject *dvalue
+    cdef Py_ssize_t pos
+
+    if PyObject_IsInstance(value, Tensor):
+        ten = <Tensor> value
+        ten._set_data(ten.to(device))
+    elif PyObject_IsInstance(value, Module):
+        module = <Module> value
+
+        for i in range(module._nstorage):
+            _migrate_parameters(<object> module._storage[i], device)
+        _migrate_parameters(module.__dict__, device)
+    elif Py_TYPE(value) is <PyTypeObject *> dict:
+        pos = 0
+        while PyDict_Next(value, &pos, &key, &dvalue):
+            _migrate_parameters(<object> dvalue, device)
+    elif Py_TYPE(value) is <PyTypeObject *> list:
+        for i in range(PyList_GET_SIZE(value)):
+            _migrate_parameters(<object> PyList_GET_ITEM(value, i), device)
+    elif Py_TYPE(value) is <PyTypeObject *> tuple:
+        for i in range(PyTuple_GET_SIZE(value)):
+            _migrate_parameters(<object> PyTuple_GET_ITEM(value, i), device)
+
 
 cdef void _set_train_mode(Module module, bint mode):
     ''' Helper to set training mode throughout children modules. '''
@@ -147,6 +181,12 @@ cdef class Module:
         ''' Set the module and child modules in evaluation mode. '''
 
         _set_train_mode(self, False)
+
+    def to(self, Device device) -> Module:
+        ''' Move current and all sub-module parameters to given device. '''
+
+        _migrate_parameters(self, device)
+        return self
 
     ## METHODS END ##
 

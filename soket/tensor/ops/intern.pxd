@@ -18,7 +18,7 @@ cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _ADD
 cdef object _add(int dev)
 
 
-## ADDITION
+## NEGATE
 cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _NEG
 cdef object _neg(int dev)
 
@@ -48,9 +48,24 @@ cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _SUM
 cdef object _sum(int dev)
 
 
+## ABS
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _ABS
+cdef object _abs(int dev)
+
+
 ## MEAN
 cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _MEAN
 cdef object _mean(int dev)
+
+
+## STD
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _STD
+cdef object _std(int dev)
+
+
+## VAR
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _VAR
+cdef object _var(int dev)
 
 
 ## MAX
@@ -151,3 +166,42 @@ cdef object _squeeze(int dev)
 ## STACK
 cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _STACK
 cdef object _stack(int dev)
+
+
+## CONCAT
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _CONCAT
+cdef object _concat(int dev)
+
+
+## COSH
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _COSH
+cdef object _cosh(int dev)
+
+
+## TANH
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _TANH
+cdef object _tanh(int dev)
+
+
+## RECIPROCAL
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _RECIPROCAL
+cdef object _reciprocal(int dev)
+
+
+## LINSPACE
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _LINSPACE
+cdef object _linspace(int dev)
+
+
+## HISTOGRAM
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _HIST
+cdef object _hist(int dev)
+
+
+## RANDOM ##
+
+## CHOICE
+cdef (PyObject *)[_NUM_SUPPORTED_DEVICES] _RANDOM_CHOICE
+cdef object _random_choice(int dev)
+
+## RANDOM END ##

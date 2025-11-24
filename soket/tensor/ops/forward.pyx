@@ -137,6 +137,12 @@ cdef object _sum_fwd(Tensor target, object x, object y, object Z):
     )
 
 
+cdef object _abs_fwd(Tensor target, object x, object y, object Z):
+    ''' Forward pass for abs() operation. '''
+
+    return _abs(target._device._dev_idx)(x)
+
+
 cdef object _mean_fwd(Tensor target, object x, object y, object Z):
     ''' Performs mean reduction over the data. '''
 
@@ -146,6 +152,46 @@ cdef object _mean_fwd(Tensor target, object x, object y, object Z):
         target._dtype._str(),
         None,
         <object> target._value_cache[1]
+    )
+
+
+cdef object _std_fwd(Tensor target, object x, object y, object Z):
+    ''' Performs standard deviation computation on the data. '''
+
+    cdef int didx = target._device._dev_idx
+    cdef object axes = <object> target._value_cache[0]
+    cdef object keepdims = <object> target._value_cache[1]
+    cdef object correction = <object> target._value_cache[4]
+
+    # Compute mean
+    cdef object mean = _mean(didx)(x, axes, target._dtype._str(), None, keepdims)
+    # Cache computed mean for bw pass
+    Py_XINCREF(<PyObject *> mean)
+    target._value_cache[3] = <PyObject *> mean
+
+    return _std(didx)(
+        x, axes, target._dtype._str(),
+        mean=mean, correction=correction
+    )
+
+
+cdef object _var_fwd(Tensor target, object x, object y, object Z):
+    ''' Performs variance computation on the data. '''
+
+    cdef int didx = target._device._dev_idx
+    cdef object axes = <object> target._value_cache[0]
+    cdef object keepdims = <object> target._value_cache[1]
+    cdef object correction = <object> target._value_cache[4]
+
+    # Compute mean
+    cdef object mean = _mean(didx)(x, axes, target._dtype._str(), None, keepdims)
+    # Cache computed mean for bw pass
+    Py_XINCREF(<PyObject *> mean)
+    target._value_cache[3] = <PyObject *> mean
+
+    return _var(didx)(
+        x, axes, target._dtype._str(),
+        mean=mean, correction=correction
     )
 
 
@@ -351,3 +397,9 @@ cdef object _bnorm_fwd(Tensor target, object x, object y, object Z):
     if layernorm:
         return _add(didx)(y, norm)
     return _add(didx)(_reshape(didx)(y, reduce_shape), norm)
+
+
+cdef object _tanh_fwd(Tensor target, object x, object y, object Z):
+    ''' Hyperbolic tangent forward pass. '''
+
+    return _tanh(target._device._dev_idx)(x)

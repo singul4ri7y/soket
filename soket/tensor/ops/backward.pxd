@@ -91,7 +91,28 @@ cdef TensorTriad _sum_bwd(
 )
 
 
+cdef TensorTriad _abs_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
 cdef TensorTriad _mean_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _std_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _var_bwd(
     Tensor node,
     Tensor adj,
     Tensor x, Tensor y, Tensor Z
@@ -183,6 +204,13 @@ cdef TensorTriad _sxentropyloss_bwd(
 
 
 cdef TensorTriad _bnorm_bwd(
+    Tensor node,
+    Tensor adj,
+    Tensor x, Tensor y, Tensor Z
+)
+
+
+cdef TensorTriad _tanh_bwd(
     Tensor node,
     Tensor adj,
     Tensor x, Tensor y, Tensor Z

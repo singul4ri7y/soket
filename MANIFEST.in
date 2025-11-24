@@ -1,0 +1,3 @@
+# Include all .py and .so files. Exclude C files.
+recursive-include soket *.py *.so
+recursive-exclude soket *.c

@@ -13,8 +13,11 @@ dependencies = ["numpy>=2.3"]
 # license = { text = "BSD-3-Clause" }
 
 [project.optional-dependencies]
-gpu = ["cupy"]
+gpu = ["cupy>=13.6"]
+
+[tool.setuptools]
+py-modules = []
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel", "cython", "numpy>=2.3"]
+requires = ["setuptools>=61.0", "wheel", "cython", "numpy>=2.3", "cupy>=13.6"]
 build-backend = "setuptools.build_meta"
